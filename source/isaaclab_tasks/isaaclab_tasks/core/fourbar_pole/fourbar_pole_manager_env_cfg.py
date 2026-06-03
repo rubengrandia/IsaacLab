@@ -22,7 +22,10 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils.configclass import configclass
 
 import isaaclab_tasks.core.fourbar_pole.mdp as mdp
-from isaaclab_tasks.core.fourbar_pole.mdp.rewards import UprightSuccessRateCommandCfg
+from isaaclab_tasks.core.fourbar_pole.mdp.rewards import (
+    LoopClosureErrorCommandCfg,
+    UprightSuccessRateCommandCfg,
+)
 from isaaclab_tasks.utils import PresetCfg
 
 ##
@@ -118,14 +121,17 @@ class CommandsCfg:
         threshold=0.95,
     )
 
+    # Metric term to monitor four-bar loop-closure (kinematic constraint) satisfaction
+    loop_closure = LoopClosureErrorCommandCfg(
+        asset_cfg=SceneEntityCfg("robot", body_names=["rocker", "ground_link"]),
+    )
+
 
 @configclass
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_effort = mdp.JointEffortActionCfg(
-        asset_name="robot", joint_names=["ground_to_crank"], scale=50.0
-    )
+    joint_effort = mdp.JointEffortActionCfg(asset_name="robot", joint_names=["ground_to_crank"], scale=50.0)
 
 
 @configclass
@@ -139,35 +145,25 @@ class ObservationsCfg:
         # pole encoded as (cos, sin, vel) to avoid the +-pi wrap discontinuity during swing-up
         pole_cos = ObsTerm(
             func=mdp.joint_pos_cos,
-            params={
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])},
         )
         pole_sin = ObsTerm(
             func=mdp.joint_pos_sin,
-            params={
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])},
         )
         pole_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])},
         )
 
         # creank encoded with (pos, vel). No wrapping possible due to joint limits.
         crank_pos = ObsTerm(
             func=mdp.joint_pos_rel,
-            params={
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["ground_to_crank"])
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["ground_to_crank"])},
         )
         crank_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["ground_to_crank"])
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["ground_to_crank"])},
         )
 
         def __post_init__(self) -> None:
@@ -252,9 +248,7 @@ class FourbarPoleSwingupEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the fourbar-pole swing-up environment."""
 
     # Scene settings
-    scene: FourbarPoleSceneCfg = FourbarPoleSceneCfg(
-        num_envs=4096, env_spacing=4.0, clone_in_fabric=True
-    )
+    scene: FourbarPoleSceneCfg = FourbarPoleSceneCfg(num_envs=4096, env_spacing=4.0, clone_in_fabric=True)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

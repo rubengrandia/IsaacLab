@@ -19,6 +19,7 @@ import torch
 
 from isaaclab.managers import CommandTerm, CommandTermCfg, SceneEntityCfg
 from isaaclab.utils.configclass import configclass
+from isaaclab.utils.math import quat_apply
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -48,9 +49,7 @@ def pole_upright(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Ten
     a dense shaping signal in ``[-1, 1]`` that drives the swing-up.
     """
     asset: Articulation = env.scene[asset_cfg.name]
-    return torch.sum(
-        torch.cos(asset.data.joint_pos.torch[:, asset_cfg.joint_ids]), dim=1
-    )
+    return torch.sum(torch.cos(asset.data.joint_pos.torch[:, asset_cfg.joint_ids]), dim=1)
 
 
 class UprightSuccessRateCommand(CommandTerm):
@@ -73,9 +72,7 @@ class UprightSuccessRateCommand(CommandTerm):
 
     def _update_metrics(self):
         pole_pos = self._asset.data.joint_pos.torch[:, self._asset_cfg.joint_ids]
-        self.metrics["success_rate"] = (
-            (torch.cos(pole_pos) > self.cfg.threshold).all(dim=1).float()
-        )
+        self.metrics["success_rate"] = (torch.cos(pole_pos) > self.cfg.threshold).all(dim=1).float()
 
     def _resample_command(self, env_ids: Sequence[int]):
         pass
@@ -88,10 +85,94 @@ class UprightSuccessRateCommand(CommandTerm):
 class UprightSuccessRateCommandCfg(CommandTermCfg):
     """Configuration for :class:`UprightSuccessRateCommand`."""
 
-    class_type: type[UprightSuccessRateCommand] | str = (
-        "{DIR}.rewards:UprightSuccessRateCommand"
-    )
+    class_type: type[UprightSuccessRateCommand] | str = "{DIR}.rewards:UprightSuccessRateCommand"
     resampling_time_range: tuple[float, float] = (1e6, 1e6)
 
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=["coupler_to_pole"])
     threshold: float = 0.95
+
+
+class LoopClosureErrorCommand(CommandTerm):
+    """Command term that monitors the four-bar loop-closure (kinematic constraint) error.
+
+    The four-bar articulation is an open tree whose loop is closed by the
+    ``rocker_to_ground`` joint (excluded from the articulation). That joint's two
+    anchors must coincide in world space for the kinematic constraint to be
+    satisfied:
+
+    - rocker anchor (``localPos0``) on body ``rocker``
+    - ground anchor (``localPos1``) on body ``ground_link``
+
+    This term reports the world-space distance between those two anchor points.
+    Zero means the loop closure is consistent. It is computed geometrically from
+    body poses, so it is solver-agnostic.
+    """
+
+    cfg: LoopClosureErrorCommandCfg
+
+    def __init__(self, cfg: LoopClosureErrorCommandCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._asset_cfg = cfg.asset_cfg
+        self._asset_cfg.resolve(env.scene)
+        self._asset: Articulation = env.scene[self._asset_cfg.name]
+
+        # Resolve body indices from the Newton model's physical body order
+        # (``model.body_label``), which is what ``body_link_pos_w`` is indexed by.
+        # The view's ``body_names`` is joint-child ordered and contains a duplicate
+        # for the closed-loop joint (``rocker_to_ground``), so ``body_names.index()``
+        # would point at the spurious phantom row instead of the real body.
+        model_body_labels = [str(label).split("/")[-1] for label in self._asset.root_view.model.body_label]
+        self._rocker_body_id = model_body_labels.index(cfg.rocker_body_name)
+        self._ground_body_id = model_body_labels.index(cfg.ground_body_name)
+
+        self._rocker_anchor = torch.tensor(cfg.rocker_anchor, device=self.device).expand(self.num_envs, 3)
+        self._ground_anchor = torch.tensor(cfg.ground_anchor, device=self.device).expand(self.num_envs, 3)
+
+        self._command = torch.zeros((self.num_envs, 1), device=self.device)
+        self.metrics["loop_closure_pos_error"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["loop_closure_pos_error_max"] = torch.zeros(self.num_envs, device=self.device)
+
+    @property
+    def command(self) -> torch.Tensor:
+        return self._command
+
+    def _update_metrics(self):
+        pos_w = self._asset.data.body_link_pos_w.torch
+        quat_w = self._asset.data.body_link_quat_w.torch
+
+        rocker_world = pos_w[:, self._rocker_body_id] + quat_apply(quat_w[:, self._rocker_body_id], self._rocker_anchor)
+        ground_world = pos_w[:, self._ground_body_id] + quat_apply(quat_w[:, self._ground_body_id], self._ground_anchor)
+        err = torch.linalg.norm(rocker_world - ground_world, dim=-1)
+
+        self._command[:, 0] = err
+        self.metrics["loop_closure_pos_error"] = err
+        self.metrics["loop_closure_pos_error_max"] = torch.maximum(self.metrics["loop_closure_pos_error_max"], err)
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        pass
+
+    def _update_command(self):
+        pass
+
+
+@configclass
+class LoopClosureErrorCommandCfg(CommandTermCfg):
+    """Configuration for :class:`LoopClosureErrorCommand`."""
+
+    class_type: type[LoopClosureErrorCommand] | str = "{DIR}.rewards:LoopClosureErrorCommand"
+    resampling_time_range: tuple[float, float] = (1e6, 1e6)
+
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["rocker", "ground_link"])
+    """Asset config resolving the loop-joint bodies, in order ``[rocker, ground_link]``."""
+
+    rocker_body_name: str = "rocker"
+    """Name of the ``rocker`` body carrying the loop-joint ``localPos0`` anchor."""
+
+    ground_body_name: str = "ground_link"
+    """Name of the ``ground_link`` body carrying the loop-joint ``localPos1`` anchor."""
+
+    rocker_anchor: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Loop-joint anchor on the ``rocker`` body (USD ``localPos0``)."""
+
+    ground_anchor: tuple[float, float, float] = (0.0, 0.2, 0.0)
+    """Loop-joint anchor on the ``ground_link`` body (USD ``localPos1``)."""

@@ -18,6 +18,7 @@ class FourbarPolePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 300
     save_interval = 50
     experiment_name = "fourbar_pole"
+    obs_groups = {"actor": ["policy"], "critic": ["policy"]}
     actor = RslRlMLPModelCfg(
         hidden_dims=[64, 64],
         activation="elu",

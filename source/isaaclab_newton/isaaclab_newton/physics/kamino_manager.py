@@ -11,6 +11,9 @@ import logging
 
 import warp as wp
 from newton import Model, eval_fk
+from newton._src.solvers.kamino._src.kinematics.joints import (
+    extract_actuators_state_from_joints,
+)
 from newton.solvers import SolverKamino
 
 from isaaclab.physics import PhysicsManager
@@ -31,20 +34,60 @@ class NewtonKaminoManager(NewtonManager):
     """
 
     @classmethod
+    def _get_kamino_solver_cfg(cls) -> KaminoSolverCfg:
+        cfg = PhysicsManager._cfg
+        if cfg is None:
+            raise RuntimeError("Physics manager is not initialized.")
+        solver_cfg = getattr(cfg, "solver_cfg", None)
+        if not isinstance(solver_cfg, KaminoSolverCfg):
+            raise TypeError(f"Expected KaminoSolverCfg, got {type(solver_cfg).__name__}.")
+        return solver_cfg
+
+    @classmethod
+    def forward(cls) -> None:
+        """Update articulation kinematics without stepping physics.
+
+        Uses Kamino's loop-closure FK (:meth:`_forward_kamino`) when
+        :attr:`KaminoSolverCfg.use_fk_solver` is enabled. The base
+        :meth:`NewtonManager.forward` path calls Newton ``eval_fk``, which
+        treats every articulation joint (including ``excludeFromArticulation``
+        loop closures) as an independent DOF and violates kinematic constraints.
+        """
+        if cls._get_kamino_solver_cfg().use_fk_solver:
+            cls._forward_kamino(world_mask=None)
+        else:
+            eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, None)
+
+    @classmethod
     def _forward_kamino(cls, world_mask: wp.array | None = None) -> None:
         """Kamino-specific forward kinematics via ``solver.reset()``.
 
-        Kamino's ``joint_q`` / ``joint_u`` include coordinates for **all** joints
-        (including free joints), so we pass Newton's full state arrays directly.
+        Used when :attr:`KaminoSolverCfg.use_fk_solver` is ``True`` (default). Extracts actuated
+        coordinates from Newton ``joint_q`` / ``joint_qd`` and passes ``actuator_q`` /
+        ``actuator_u`` so Kamino FK resolves passive joints.
 
         Args:
             world_mask: Per-world mask indicating which worlds to reset.
                 Shape ``(num_worlds,)``, dtype ``wp.int32``. If None, resets all worlds.
         """
-        cls._solver.reset(
-            state_out=cls._state_0,
+
+        solver_kamino = cls._solver._solver_kamino
+        model_kamino = cls._solver._model_kamino
+        effective_world_mask = world_mask if world_mask is not None else solver_kamino._all_worlds_mask
+
+        extract_actuators_state_from_joints(
+            model=model_kamino,
+            world_mask=effective_world_mask,
             joint_q=cls._state_0.joint_q,
             joint_u=cls._state_0.joint_qd,
+            actuator_q=solver_kamino._actuators_q,
+            actuator_u=solver_kamino._actuators_u,
+        )
+
+        cls._solver.reset(
+            state_out=cls._state_0,
+            actuator_q=solver_kamino._actuators_q,
+            actuator_u=solver_kamino._actuators_u,
             world_mask=world_mask,
         )
 
@@ -54,13 +97,6 @@ class NewtonKaminoManager(NewtonManager):
         sim = PhysicsManager._sim
         if sim is None or not sim.is_playing():
             return
-
-        # Kamino: run solver.reset() with the accumulated world mask to reinitialise
-        # internal state (warm-start containers, constraint multipliers) for reset worlds.
-        # Note: runs every step. solver.reset() with an all-False world_mask is a no-op
-        # (kernels check mask per-world and skip). The cost of a no-op launch is negligible
-        # compared to the complexity of maintaining a separate boolean guard.
-        cls._forward_kamino(world_mask=cls._world_reset_mask)
 
         # Notify solver of model changes
         if cls._model_changes:
@@ -87,11 +123,9 @@ class NewtonKaminoManager(NewtonManager):
             else:
                 logger.warning("Newton deferred CUDA graph capture failed; using eager execution")
 
-        # Ensure body_q is up-to-date before collision detection.
-        # After env resets, joint_q is written but body_q (used by
-        # broadphase/narrowphase) is stale until FK runs.
-        # Only runs FK for dirtied articulations via the accumulated mask.
-        if cls._needs_collision_pipeline:
+        if cls._get_kamino_solver_cfg().use_fk_solver:
+            cls._forward_kamino(world_mask=cls._world_reset_mask)
+        else:
             eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, cls._fk_reset_mask)
 
         # Zero both masks after consumption

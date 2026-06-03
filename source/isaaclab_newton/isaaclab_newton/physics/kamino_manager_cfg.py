@@ -49,10 +49,16 @@ class KaminoSolverCfg(NewtonSolverCfg):
     """Whether to use Kamino's internal collision detector instead of Newton's pipeline."""
 
     use_fk_solver: bool = True
-    """Whether to enable the forward kinematics solver for state resets.
+    """Whether to enable the forward kinematics solver for Kamino state resets.
 
-    Required for proper environment resets. The FK solver computes consistent body poses
-    from joint angles after state writes, which is essential for maximal-coordinate solvers.
+    When ``True``, :meth:`NewtonKaminoManager._forward_kamino` passes actuated
+    coordinates only (``actuator_q`` / ``actuator_u``) to :meth:`SolverKamino.reset`.
+    Kamino's FK solver computes body poses and resolves passive / loop-closure joints.
+    Environment resets should only write actuated DOFs in ``joint_q``; passive values
+    are filled in by FK.
+
+    When ``False``, an articulated FK is used instead using the full``joint_q`` / ``joint_qd``.
+    It is then up to the user to specify constraint consistent values.
     """
 
     sparse_jacobian: bool = False

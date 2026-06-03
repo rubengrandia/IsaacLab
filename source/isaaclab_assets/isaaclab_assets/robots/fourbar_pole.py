@@ -11,9 +11,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-_FOURBAR_POLE_DIR = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), "Fourbar_pole"
-)
+_FOURBAR_POLE_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "Fourbar_pole")
 _FOURBAR_POLE_USD = os.path.join(_FOURBAR_POLE_DIR, "fourbar_pole.usda")
 
 ##
@@ -37,7 +35,6 @@ FOURBAR_POLE_CFG = ArticulationCfg(
             sleep_threshold=0.005,
             stabilization_threshold=0.001,
         ),
-        joint_drive_props=sim_utils.JointDrivePropertiesCfg(ensure_drives_exist=True),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.0),
