@@ -45,18 +45,31 @@ class NewtonKaminoManager(NewtonManager):
 
     @classmethod
     def forward(cls) -> None:
-        """Update articulation kinematics without stepping physics.
+        """Reconcile body state from joint coordinates for the dirtied worlds only.
 
         Uses Kamino's loop-closure FK (:meth:`_forward_kamino`) when
         :attr:`KaminoSolverCfg.use_fk_solver` is enabled. The base
         :meth:`NewtonManager.forward` path calls Newton ``eval_fk``, which
         treats every articulation joint (including ``excludeFromArticulation``
         loop closures) as an independent DOF and violates kinematic constraints.
+
+        For the Kamino (maximal-coordinate) solver, ``_forward_kamino`` runs
+        ``solver.reset()``, which overwrites the authoritative ``state_0.body_q`` /
+        ``body_qd``. Restricting the solve to :attr:`_world_reset_mask` keeps
+        in-flight (non-reset) worlds untouched, and zeroing the masks afterwards
+        means the next :meth:`step` does not redundantly re-solve them. A ``None``
+        mask (before :meth:`start_simulation` allocates it) falls back to the full
+        reconcile, and the mask is seeded dirty at allocation so the first call
+        here establishes a kinematically consistent initial state for all worlds.
         """
         if cls._get_kamino_solver_cfg().use_fk_solver:
-            cls._forward_kamino(world_mask=None)
+            cls._forward_kamino(world_mask=cls._world_reset_mask)
         else:
-            eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, None)
+            eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, cls._fk_reset_mask)
+        if cls._world_reset_mask is not None:
+            cls._world_reset_mask.zero_()
+        if cls._fk_reset_mask is not None:
+            cls._fk_reset_mask.zero_()
 
     @classmethod
     def _forward_kamino(cls, world_mask: wp.array | None = None) -> None:

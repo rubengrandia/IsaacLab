@@ -327,6 +327,29 @@ class NewtonManager(PhysicsManager):
             cls.initialize_solver()
 
     @classmethod
+    def active(cls) -> type[NewtonManager]:
+        """Return the active solver-manager subclass.
+
+        The data layer imports the base :class:`NewtonManager` (aliased as
+        ``SimulationManager``) and shares its canonical state, but solver-specific
+        behavior such as :meth:`forward` lives on the concrete subclass selected by
+        the active :class:`~isaaclab.sim.SimulationContext`. Because those are
+        classmethods, calling them through the base class would not dispatch to the
+        subclass override; resolve the concrete manager here and invoke methods on
+        it instead (e.g. ``SimulationManager.active().forward()``).
+
+        Returns:
+            The active manager subclass (``sim.physics_manager``) when a simulation
+            context is initialized, otherwise the class this is called on.
+        """
+        sim = PhysicsManager._sim
+        if sim is not None:
+            active = getattr(sim, "physics_manager", None)
+            if active is not None:
+                return active
+        return cls
+
+    @classmethod
     def forward(cls) -> None:
         """Update articulation kinematics without stepping physics.
 
@@ -335,6 +358,14 @@ class NewtonManager(PhysicsManager):
         the full (unmasked) FK path used during initial setup. For incremental
         per-environment updates after resets, see :meth:`invalidate_fk` which
         accumulates masks consumed by :meth:`step`.
+
+        .. note::
+            Solver subclasses (e.g. :class:`NewtonKaminoManager`) may override this
+            with a solver-specific FK that, for instance, resolves excluded
+            ``excludeFromArticulation`` loop-closure joints. On-read callers in the
+            data layer must reach that override via :meth:`active` rather than
+            invoking this base method directly, since a classmethod called through
+            the base class does not dispatch to the subclass.
         """
         eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, None)
 
@@ -1006,9 +1037,15 @@ class NewtonManager(PhysicsManager):
         NewtonManager._adapter = None
         NewtonManager._use_newton_actuators_active = False
 
-        # Allocate per-world reset masks (used by all solvers for masked FK, and by Kamino for masked reset)
+        # Allocate per-world reset masks (used by all solvers for masked FK, and by Kamino for masked reset).
+        # Seed them dirty so the first forward()/step() reconciles every world, establishing a kinematically
+        # consistent initial state. This matters for the Kamino loop-closure solver, whose masked FK only
+        # touches the worlds flagged here; an all-zero seed would otherwise skip the initial reconcile and
+        # leave loop-closure constraints unsatisfied until the first reset writes joint coordinates.
         NewtonManager._world_reset_mask = wp.zeros(cls._model.world_count, dtype=wp.int32, device=device)
         NewtonManager._fk_reset_mask = wp.zeros(cls._model.articulation_count, dtype=wp.bool, device=device)
+        NewtonManager._world_reset_mask.fill_(1)
+        NewtonManager._fk_reset_mask.fill_(True)
 
         logger.info("Dispatching PHYSICS_READY callbacks")
         cls.dispatch_event(PhysicsEvent.PHYSICS_READY)

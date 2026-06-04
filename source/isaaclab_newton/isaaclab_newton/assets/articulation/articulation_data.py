@@ -124,14 +124,17 @@ class ArticulationData(BaseArticulationData):
     def _ensure_fk_fresh(self) -> None:
         """Run forward kinematics if joint state has changed since the last FK update.
 
-        Newton's ``state.body_q`` (per-body world transforms) is updated by ``eval_fk``,
-        invoked here through ``SimulationManager.forward()``. After a manual joint or root
-        write that bypassed the sim step (``write_*_to_sim_*``), ``_fk_timestamp`` is set
-        to ``-1.0`` to force a refresh on the next read of any property that depends on
-        body poses (``body_link_pose_w``, the Jacobian properties, ``mass_matrix``).
+        Newton's ``state.body_q`` (per-body world transforms) is updated by the active
+        solver manager's ``forward()``, dispatched here via
+        ``SimulationManager.active().forward()`` so solver-specific FK overrides (e.g.
+        the Kamino loop-closure reconcile) run instead of the generic base ``eval_fk``.
+        After a manual joint or root write that bypassed the sim step
+        (``write_*_to_sim_*``), ``_fk_timestamp`` is set to ``-1.0`` to force a refresh
+        on the next read of any property that depends on body poses
+        (``body_link_pose_w``, the Jacobian properties, ``mass_matrix``).
         """
         if self._fk_timestamp < self._sim_timestamp:
-            SimulationManager.forward()
+            SimulationManager.active().forward()
             self._fk_timestamp = self._sim_timestamp
 
     """
@@ -861,9 +864,9 @@ class ArticulationData(BaseArticulationData):
         Newton implementation: applies the COM→origin shift kernel to
         :attr:`body_com_jacobian_w` (Newton's ``eval_jacobian`` is COM-referenced).
         """
-        # ``body_link_pose_w`` accessor triggers ``SimulationManager.forward()`` if FK is
-        # stale (after a manual joint / root write that bypassed the sim step). Reading the
-        # property here — not ``_sim_bind_body_link_pose_w`` directly — keeps the shift
+        # ``body_link_pose_w`` accessor triggers ``SimulationManager.active().forward()`` if
+        # FK is stale (after a manual joint / root write that bypassed the sim step). Reading
+        # the property here — not ``_sim_bind_body_link_pose_w`` directly — keeps the shift
         # kernel from using stale link rotations during reset / IK-warm-start paths.
         link_pose_w = self.body_link_pose_w.warp
         com_jac = self.body_com_jacobian_w
