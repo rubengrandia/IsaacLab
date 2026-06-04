@@ -170,6 +170,18 @@ class NewtonSceneDataBackend(SceneDataBackend):
         return NewtonManager.get_state_0()
 
 
+def _reconcile_fk_unbound(world_mask: wp.array | None, fk_mask: wp.array | None) -> None:
+    """Default :attr:`NewtonManager._reconcile_fk` value before a solver is initialized.
+
+    Raises so a stray ``forward()`` / ``step()`` before ``initialize_solver()`` fails loudly
+    instead of silently running a wrong (or no) FK reconcile.
+    """
+    raise RuntimeError(
+        "FK reconcile hook is not bound. NewtonManager.initialize_solver() must run "
+        "(via reset()) before forward()/step() can reconcile body state."
+    )
+
+
 class NewtonManager(PhysicsManager):
     """Abstract Newton physics manager for Isaac Lab.
 
@@ -230,6 +242,14 @@ class NewtonManager(PhysicsManager):
     # Per-world reset masks (allocated in start_simulation, consumed in step)
     _world_reset_mask: wp.array | None = None  # (num_envs,) wp.int32 — for SolverKamino.reset(world_mask=...)
     _fk_reset_mask: wp.array | None = None  # (articulation_count,) wp.bool — for eval_fk(mask=...)
+
+    # Forward-kinematics reconcile (solver-specialized). Bound in initialize_solver to the active
+    # subclass's :meth:`_eval_fk` so :meth:`forward` / :meth:`step` dispatch correctly even when
+    # called through the base class. Flags follow the same "set in _build_solver, reset in clear"
+    # pattern as _needs_collision_pipeline / _use_single_state.
+    _reconcile_fk: Callable[[wp.array | None, wp.array | None], None] = _reconcile_fk_unbound
+    _reconcile_fk_before_step: bool = False  # step() reconciles body state from joints before stepping
+    _forward_full_reconcile: bool = True  # forward() reconciles all worlds (unmasked) vs only the dirtied mask
 
     # Newton actuator adapter (owns actuators and double-buffered states)
     _adapter: NewtonActuatorAdapter | None = None
@@ -327,47 +347,39 @@ class NewtonManager(PhysicsManager):
             cls.initialize_solver()
 
     @classmethod
-    def active(cls) -> type[NewtonManager]:
-        """Return the active solver-manager subclass.
+    def _eval_fk(cls, world_mask: wp.array | None, fk_mask: wp.array | None) -> None:
+        """Reconcile body state from joint coordinates.
 
-        The data layer imports the base :class:`NewtonManager` (aliased as
-        ``SimulationManager``) and shares its canonical state, but solver-specific
-        behavior such as :meth:`forward` lives on the concrete subclass selected by
-        the active :class:`~isaaclab.sim.SimulationContext`. Because those are
-        classmethods, calling them through the base class would not dispatch to the
-        subclass override; resolve the concrete manager here and invoke methods on
-        it instead (e.g. ``SimulationManager.active().forward()``).
+        Solver-specialized forward kinematics. The base implementation runs Newton's
+        generic ``eval_fk`` over the articulations selected by ``fk_mask`` (``None`` means
+        all). Solver subclasses (e.g. :class:`NewtonKaminoManager`) override this to resolve
+        excluded ``excludeFromArticulation`` loop-closure joints, and may instead key off
+        ``world_mask``.
 
-        Returns:
-            The active manager subclass (``sim.physics_manager``) when a simulation
-            context is initialized, otherwise the class this is called on.
+        Args:
+            world_mask: Per-world mask of worlds to reconcile (``None`` means all). Used by
+                solvers that reset in world space (e.g. Kamino); ignored by the base.
+            fk_mask: Per-articulation mask of articulations to reconcile (``None`` means all).
         """
-        sim = PhysicsManager._sim
-        if sim is not None:
-            active = getattr(sim, "physics_manager", None)
-            if active is not None:
-                return active
-        return cls
+        eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, fk_mask)
 
     @classmethod
     def forward(cls) -> None:
         """Update articulation kinematics without stepping physics.
 
-        Runs Newton's generic forward kinematics (``eval_fk``) over **all**
-        articulations to compute body poses from joint coordinates. This is
-        the full (unmasked) FK path used during initial setup. For incremental
-        per-environment updates after resets, see :meth:`invalidate_fk` which
-        accumulates masks consumed by :meth:`step`.
-
-        .. note::
-            Solver subclasses (e.g. :class:`NewtonKaminoManager`) may override this
-            with a solver-specific FK that, for instance, resolves excluded
-            ``excludeFromArticulation`` loop-closure joints. On-read callers in the
-            data layer must reach that override via :meth:`active` rather than
-            invoking this base method directly, since a classmethod called through
-            the base class does not dispatch to the subclass.
+        Reconciles body poses from joint coordinates via the solver-specialized FK hook
+        (:attr:`_reconcile_fk`, bound in :meth:`initialize_solver`). When
+        :attr:`_forward_full_reconcile` is ``True`` (base default) all worlds are reconciled;
+        otherwise only the worlds/articulations flagged dirty in the reset masks (see
+        :meth:`invalidate_fk`) are touched. The masks are consumed (zeroed) afterwards so the
+        next :meth:`step` does not redundantly re-solve them.
         """
-        eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, None)
+        if cls._forward_full_reconcile:
+            cls._reconcile_fk(None, None)
+        else:
+            cls._reconcile_fk(cls._world_reset_mask, cls._fk_reset_mask)
+        cls._world_reset_mask.zero_()
+        cls._fk_reset_mask.zero_()
 
     @classmethod
     def pre_render(cls) -> None:
@@ -590,16 +602,22 @@ class NewtonManager(PhysicsManager):
             NewtonManager._graph_capture_pending = False
             NewtonManager._graph = cls._capture_relaxed_graph(device)
             if cls._graph is not None:
+                # Kamino: StateKamino.from_newton() lazily allocates body_f_total,
+                # joint_q_prev, and joint_lambdas via wp.clone/wp.zeros during the
+                # first step() inside graph capture. Replay once to pin those
+                # memory-pool addresses before any eager solver.reset() call.
+                if isinstance(cls._solver, SolverKamino):
+                    wp.capture_launch(cls._graph)
                 logger.info("Newton CUDA graph captured (deferred relaxed mode, RTX-compatible)")
             else:
                 logger.warning("Newton deferred CUDA graph capture failed; using eager execution")
 
-        # Ensure body_q is up-to-date before collision detection.
-        # After env resets, joint_q is written but body_q (used by
-        # broadphase/narrowphase) is stale until FK runs.
-        # Only runs FK for dirtied articulations via the accumulated mask.
-        if cls._needs_collision_pipeline:
-            eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, cls._fk_reset_mask)
+        # Ensure body_q is up-to-date before stepping. After env resets, joint_q is written
+        # but body_q (used by broadphase/narrowphase, and the authoritative state for
+        # maximal-coordinate solvers) is stale until FK runs. Reconcile via the
+        # solver-specialized hook for dirtied articulations only (the accumulated mask).
+        if cls._reconcile_fk_before_step:
+            cls._reconcile_fk(cls._world_reset_mask, cls._fk_reset_mask)
 
         # Zero both masks after consumption
         NewtonManager._world_reset_mask.zero_()
@@ -710,6 +728,10 @@ class NewtonManager(PhysicsManager):
         # Per-world reset masks
         NewtonManager._world_reset_mask = None
         NewtonManager._fk_reset_mask = None
+        # Forward-kinematics reconcile hook and flags
+        NewtonManager._reconcile_fk = _reconcile_fk_unbound
+        NewtonManager._reconcile_fk_before_step = False
+        NewtonManager._forward_full_reconcile = True
         NewtonManager._graph = None
         NewtonManager._graph_capture_pending = False
         NewtonManager._newton_stage_path = None
@@ -1027,7 +1049,9 @@ class NewtonManager(PhysicsManager):
         NewtonManager._state_0 = cls._model.state()
         NewtonManager._state_1 = cls._model.state()
         NewtonManager._control = cls._model.control()
-        eval_fk(cls._model, cls._state_0.joint_q, cls._state_0.joint_qd, cls._state_0, None)
+        # The initial body-state reconcile from joint coordinates is deferred to the tail of
+        # initialize_solver(), where it runs through the solver-specialized FK hook
+        # (cls._reconcile_fk).
 
         # The single global actuator adapter is built lazily on the first
         # call to ``activate_newton_actuator_path`` from any Newton-fast-path
@@ -1294,6 +1318,21 @@ class NewtonManager(PhysicsManager):
                     "NewtonManager._use_single_state, and NewtonManager._needs_collision_pipeline."
                 )
             cls._initialize_contacts()
+
+            # Bind the solver-specialized FK hook to the active subclass's _eval_fk so that
+            # forward()/step() dispatch correctly even when forward() is invoked through the
+            # base class (the data layer imports NewtonManager directly). cls is the concrete
+            # subclass here, since initialize_solver is reached via sim.physics_manager.reset().
+            NewtonManager._reconcile_fk = cls._eval_fk
+            # Fold the collision need into the single step-time gate; _build_solver ran first,
+            # so a solver like Kamino has already set its own True. This only ever promotes.
+            if cls._needs_collision_pipeline:
+                NewtonManager._reconcile_fk_before_step = True
+
+            # Establish the initial kinematically-consistent body state through the
+            # solver-specialized FK hook, now that the solver and the hook both exist. It runs
+            # before graph capture below so the capture warmup sees a valid body_q.
+            cls._reconcile_fk(None, None)
 
         if cls._usdrt_stage is not None:
             cls._setup_cubric_bindings()

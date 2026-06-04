@@ -290,7 +290,7 @@ class RigidObjectData(BaseRigidObjectData):
         The orientation is provided in (x, y, z, w) format.
         """
         if self._fk_timestamp < self._sim_timestamp:
-            SimulationManager.active().forward()
+            SimulationManager.forward()
             self._fk_timestamp = self._sim_timestamp
         return self._body_link_pose_w_ta
 
