@@ -1556,7 +1556,7 @@ class NewtonManager(PhysicsManager):
                     cls._collision_pipeline.collide(cls._state_0, contacts)
         else:
             cfg = PhysicsManager._cfg
-            need_copy_on_last = (cfg is not None and cfg.use_cuda_graph) and cls._num_substeps % 2 == 1  # type: ignore[union-attr]
+            need_copy_on_last = cfg is not None and cls._num_substeps % 2 == 1  # type: ignore[union-attr]
             for i in range(cls._num_substeps):
                 cls._step_solver(cls._state_0, cls._state_1, cls._control, contacts, cls._solver_dt)
                 if need_copy_on_last and i == cls._num_substeps - 1:

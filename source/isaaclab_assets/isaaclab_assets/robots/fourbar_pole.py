@@ -13,6 +13,7 @@ from isaaclab.assets import ArticulationCfg
 
 _FOURBAR_POLE_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "Fourbar_pole")
 _FOURBAR_POLE_USD = os.path.join(_FOURBAR_POLE_DIR, "fourbar_pole.usda")
+_FOURBAR_POLE_FLOATING_USD = os.path.join(_FOURBAR_POLE_DIR, "fourbar_pole_floating.usda")
 
 ##
 # Configuration
@@ -61,3 +62,18 @@ FOURBAR_POLE_CFG = ArticulationCfg(
     },
 )
 """Configuration for a parallel four-bar linkage with a pole on the coupler midpoint."""
+
+
+FOURBAR_POLE_FLOATING_CFG = FOURBAR_POLE_CFG.replace(
+    spawn=FOURBAR_POLE_CFG.spawn.replace(usd_path=_FOURBAR_POLE_FLOATING_USD),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 1.0),
+        joint_pos={
+            "ground_to_crank": 0.0,
+            "crank_to_coupler": 0.0,
+            "coupler_to_rocker": 0.0,
+            "coupler_to_pole": 0.0,
+        },
+    ),
+)
+"""Floating-base variant of :data:`FOURBAR_POLE_CFG` (no fixed root joint)."""
