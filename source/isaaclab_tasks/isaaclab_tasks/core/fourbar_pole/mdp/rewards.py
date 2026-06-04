@@ -129,8 +129,9 @@ class LoopClosureErrorCommand(CommandTerm):
         self._ground_anchor = torch.tensor(cfg.ground_anchor, device=self.device).expand(self.num_envs, 3)
 
         self._command = torch.zeros((self.num_envs, 1), device=self.device)
-        self.metrics["loop_closure_pos_error"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["loop_closure_pos_error_mean"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["loop_closure_pos_error_max"] = torch.zeros(self.num_envs, device=self.device)
+        self._loop_closure_metric_step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
     @property
     def command(self) -> torch.Tensor:
@@ -144,9 +145,17 @@ class LoopClosureErrorCommand(CommandTerm):
         ground_world = pos_w[:, self._ground_body_id] + quat_apply(quat_w[:, self._ground_body_id], self._ground_anchor)
         err = torch.linalg.norm(rocker_world - ground_world, dim=-1)
 
-        self._command[:, 0] = err
-        self.metrics["loop_closure_pos_error"] = err
+        self._loop_closure_metric_step_count += 1
+        n = self._loop_closure_metric_step_count.float()
+        self.metrics["loop_closure_pos_error_mean"] += (err - self.metrics["loop_closure_pos_error_mean"]) / n
         self.metrics["loop_closure_pos_error_max"] = torch.maximum(self.metrics["loop_closure_pos_error_max"], err)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        if env_ids is None:
+            self._loop_closure_metric_step_count.zero_()
+        else:
+            self._loop_closure_metric_step_count[env_ids] = 0
+        return super().reset(env_ids)
 
     def _resample_command(self, env_ids: Sequence[int]):
         pass
