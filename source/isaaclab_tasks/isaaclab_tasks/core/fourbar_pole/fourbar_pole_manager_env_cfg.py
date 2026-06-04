@@ -56,7 +56,7 @@ class FourbarPolePhysicsCfg(PresetCfg):
             use_fk_solver=True,
             sparse_jacobian=True,
             constraints_alpha=0.1,
-            padmm_max_iterations=200,
+            padmm_max_iterations=100,
             padmm_rho_0=0.1,
             padmm_warmstart_mode="containers",
         ),
@@ -214,19 +214,19 @@ class RewardsCfg:
     # (2) Shaping: damp the pole angular velocity to settle at the top
     pole_vel = RewTerm(
         func=mdp.joint_vel_l1,
-        weight=-0.005,
+        weight=-0.01,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["coupler_to_pole"])},
     )
     # (3) Shaping: discourage excessive crank motion
     crank_vel = RewTerm(
         func=mdp.joint_vel_l1,
-        weight=-0.01,
+        weight=-0.05,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["ground_to_crank"])},
     )
     # (4) Shaping: penalize control effort
     effort = RewTerm(
         func=mdp.action_l2,
-        weight=-0.001,
+        weight=-0.01,
     )
 
 
