@@ -19,7 +19,7 @@ import torch
 
 from isaaclab.managers import CommandTerm, CommandTermCfg, SceneEntityCfg
 from isaaclab.utils.configclass import configclass
-from isaaclab.utils.math import quat_apply
+from isaaclab.utils.math import combine_frame_transforms, compute_pose_error, quat_apply
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -93,19 +93,18 @@ class UprightSuccessRateCommandCfg(CommandTermCfg):
 
 
 class LoopClosureErrorCommand(CommandTerm):
-    """Command term that monitors the four-bar loop-closure (kinematic constraint) error.
+    """Command term that monitors four-bar kinematic consistency.
 
-    The four-bar articulation is an open tree whose loop is closed by the
+    Loop closure: the four-bar articulation is an open tree whose loop is closed by the
     ``rocker_to_ground`` joint (excluded from the articulation). That joint's two
-    anchors must coincide in world space for the kinematic constraint to be
-    satisfied:
+    anchors must coincide in world space:
 
     - rocker anchor (``localPos0``) on body ``rocker``
     - ground anchor (``localPos1``) on body ``ground_link``
 
-    This term reports the world-space distance between those two anchor points.
-    Zero means the loop closure is consistent. It is computed geometrically from
-    body poses, so it is solver-agnostic.
+    Ground link pose: ``ground_link`` is fixed to the world via ``root_joint`` and should
+    remain at the articulation spawn pose (``expected_pos`` / ``expected_quat`` relative to
+    each env origin). Position and orientation errors are reported separately.
     """
 
     cfg: LoopClosureErrorCommandCfg
@@ -131,7 +130,15 @@ class LoopClosureErrorCommand(CommandTerm):
         self._command = torch.zeros((self.num_envs, 1), device=self.device)
         self.metrics["loop_closure_pos_error_mean"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["loop_closure_pos_error_max"] = torch.zeros(self.num_envs, device=self.device)
-        self._loop_closure_metric_step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.metrics["ground_link_pos_error_mean"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["ground_link_pos_error_max"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["ground_link_ori_error_mean"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["ground_link_ori_error_max"] = torch.zeros(self.num_envs, device=self.device)
+        self._kinematic_metric_step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+
+        self._expected_pos_b = torch.tensor(cfg.expected_pos, device=self.device).expand(self.num_envs, 3)
+        self._expected_quat_b = torch.tensor(cfg.expected_quat, device=self.device).expand(self.num_envs, 4)
+        self._env_origin_quat_w = torch.tensor((0.0, 0.0, 0.0, 1.0), device=self.device).expand(self.num_envs, 4)
 
     @property
     def command(self) -> torch.Tensor:
@@ -143,18 +150,45 @@ class LoopClosureErrorCommand(CommandTerm):
 
         rocker_world = pos_w[:, self._rocker_body_id] + quat_apply(quat_w[:, self._rocker_body_id], self._rocker_anchor)
         ground_world = pos_w[:, self._ground_body_id] + quat_apply(quat_w[:, self._ground_body_id], self._ground_anchor)
-        err = torch.linalg.norm(rocker_world - ground_world, dim=-1)
+        loop_err = torch.linalg.norm(rocker_world - ground_world, dim=-1)
 
-        self._loop_closure_metric_step_count += 1
-        n = self._loop_closure_metric_step_count.float()
-        self.metrics["loop_closure_pos_error_mean"] += (err - self.metrics["loop_closure_pos_error_mean"]) / n
-        self.metrics["loop_closure_pos_error_max"] = torch.maximum(self.metrics["loop_closure_pos_error_max"], err)
+        expected_pos_w, expected_quat_w = combine_frame_transforms(
+            self._env.scene.env_origins,
+            self._env_origin_quat_w,
+            self._expected_pos_b,
+            self._expected_quat_b,
+        )
+        ground_pos_err, ground_rot_err = compute_pose_error(
+            pos_w[:, self._ground_body_id],
+            quat_w[:, self._ground_body_id],
+            expected_pos_w,
+            expected_quat_w,
+        )
+        ground_pos_err = torch.linalg.norm(ground_pos_err, dim=-1)
+        ground_ori_err = torch.linalg.norm(ground_rot_err, dim=-1)
+
+        self._kinematic_metric_step_count += 1
+        n = self._kinematic_metric_step_count.float()
+        self.metrics["loop_closure_pos_error_mean"] += (loop_err - self.metrics["loop_closure_pos_error_mean"]) / n
+        self.metrics["loop_closure_pos_error_max"] = torch.maximum(self.metrics["loop_closure_pos_error_max"], loop_err)
+        self.metrics["ground_link_pos_error_mean"] += (
+            ground_pos_err - self.metrics["ground_link_pos_error_mean"]
+        ) / n
+        self.metrics["ground_link_pos_error_max"] = torch.maximum(
+            self.metrics["ground_link_pos_error_max"], ground_pos_err
+        )
+        self.metrics["ground_link_ori_error_mean"] += (
+            ground_ori_err - self.metrics["ground_link_ori_error_mean"]
+        ) / n
+        self.metrics["ground_link_ori_error_max"] = torch.maximum(
+            self.metrics["ground_link_ori_error_max"], ground_ori_err
+        )
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         if env_ids is None:
-            self._loop_closure_metric_step_count.zero_()
+            self._kinematic_metric_step_count.zero_()
         else:
-            self._loop_closure_metric_step_count[env_ids] = 0
+            self._kinematic_metric_step_count[env_ids] = 0
         return super().reset(env_ids)
 
     def _resample_command(self, env_ids: Sequence[int]):
@@ -185,3 +219,9 @@ class LoopClosureErrorCommandCfg(CommandTermCfg):
 
     ground_anchor: tuple[float, float, float] = (0.0, 0.2, 0.0)
     """Loop-joint anchor on the ``ground_link`` body (USD ``localPos1``)."""
+
+    expected_pos: tuple[float, float, float] = (0.0, 0.0, 1.5)
+    """Expected ``ground_link`` position relative to each env origin (articulation spawn pose)."""
+
+    expected_quat: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    """Expected ``ground_link`` orientation ``(x, y, z, w)`` relative to each env origin."""
