@@ -44,7 +44,7 @@ _PUBLIC_APIS = {
     "JOINT-05": "Newton joint velocity-limit USD/config/index-writer paths",
     "JOINT-06": "Newton joint effort-limit USD/config/index-writer paths",
     "JOINT-07": "write_joint_armature_to_sim_index",
-    "JOINT-08": "USD newton:damping authoring",
+    "JOINT-08": "write_joint_viscous_friction_coefficient_to_sim_index",
     "JOINT-09": "Newton joint-friction USD/config/index-writer paths",
 }
 
@@ -286,20 +286,22 @@ def test_joint_07_armature_single_step(parameter_adapter, joint_type, authoring,
 
 
 @pytest.mark.parametrize("joint_type", ["revolute", "prismatic"])
+@pytest.mark.parametrize("authoring", ["usd", "cfg", "runtime"])
 @pytest.mark.parametrize("passive_damping", [0.0, 3.0, 6.0])
 @pytest.mark.parametrize("parameter_adapter", ["kamino", "mjwarp"], indirect=True)
-def test_joint_08_passive_damping_usd_single_step(parameter_adapter, joint_type, passive_damping):
-    """JOINT-08: USD-authored passive damping reproduces the backend's analytical step."""
+def test_joint_08_passive_damping_single_step(parameter_adapter, joint_type, authoring, passive_damping):
+    """JOINT-08: Authored passive damping reproduces the backend's analytical step."""
     velocity_initial = 1.0
     result = parameter_adapter.run_single_dof_step(
         joint_type,
-        "usd",
+        authoring,
         stiffness=0.0,
         damping=0.0,
         armature=0.0,
         position_target=0.0,
         velocity=velocity_initial,
         passive_damping=passive_damping,
+        dof_authoring="usd",
     )
     velocity, position = parameter_adapter.predict_dof_step(
         stiffness=0.0,
@@ -313,7 +315,7 @@ def test_joint_08_passive_damping_usd_single_step(parameter_adapter, joint_type,
     _assert_step(
         parameter_adapter,
         "JOINT-08",
-        "usd",
+        authoring,
         result,
         velocity,
         position,

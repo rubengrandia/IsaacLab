@@ -424,6 +424,7 @@ def make_single_dof_cfg(
     effort_limit_sim: float | None = None,
     velocity_limit_sim: float | None = None,
     friction: float | None = None,
+    viscous_friction: float | None = None,
     joint_position: float = 0.0,
     joint_velocity: float = 0.0,
 ) -> ArticulationCfg:
@@ -444,6 +445,7 @@ def make_single_dof_cfg(
                 effort_limit_sim=effort_limit_sim,
                 velocity_limit_sim=velocity_limit_sim,
                 friction=friction,
+                viscous_friction=viscous_friction,
             )
         },
     )

@@ -302,19 +302,10 @@ def test_state_02_initial_and_live_com_velocity(parameter_adapter, authoring):
         )
 
 
-_BODY_01_MASS_XFAIL_REASON = (
-    "IsaacLab#6518: The articulation / rigid object does not refresh inverse mass after the public runtime mass writer"
-)
-
 _BODY_01_CASES = [
     pytest.param("kamino", "usd", id="kamino-usd"),
     pytest.param("kamino", "cfg", id="kamino-cfg"),
-    pytest.param(
-        "kamino",
-        "runtime",
-        id="kamino-runtime",
-        marks=pytest.mark.xfail(strict=True, reason=_BODY_01_MASS_XFAIL_REASON),
-    ),
+    pytest.param("kamino", "runtime", id="kamino-runtime"),
     pytest.param("mjwarp", "usd", id="mjwarp-usd"),
     pytest.param("mjwarp", "cfg", id="mjwarp-cfg"),
     pytest.param("mjwarp", "runtime", id="mjwarp-runtime"),
@@ -351,12 +342,7 @@ def test_body_01_mass_wrench_response(parameter_adapter, authoring):
 
 _BODY_02_CASES = [
     pytest.param("kamino", "usd", id="kamino-usd"),
-    pytest.param(
-        "kamino",
-        "runtime",
-        id="kamino-runtime",
-        marks=pytest.mark.xfail(strict=True, reason=_BODY_01_MASS_XFAIL_REASON),
-    ),
+    pytest.param("kamino", "runtime", id="kamino-runtime"),
     pytest.param("mjwarp", "usd", id="mjwarp-usd"),
     pytest.param("mjwarp", "runtime", id="mjwarp-runtime"),
 ]

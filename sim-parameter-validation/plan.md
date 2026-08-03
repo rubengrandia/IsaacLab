@@ -1,9 +1,9 @@
 ## Isaac Lab parameter simulation validation
 
-**Status:** Draft design, implementation in progress
+**Status:** Newton validation follow-up complete; Phase 4 gaps and PhysX remain
 **Backends in v1:** `isaaclab_physx`, Newton-MJWarp, Newton-Kamino
 **Deferred backends:** `isaaclab_ovphysx`
-**Last updated:** 2026-07-24
+**Last updated:** 2026-08-03
 
 The goal of this document is to outline a set of tests that validate that Isaac Lab correctly sets physical
 parameters in its simulation backends. The simulator should be treated as a black box: each test should use a
@@ -14,6 +14,85 @@ rather than real-world validation. This document uses "physical validation" for 
 but preserves that distinction when citing Newton tests. Existing Newton tests establish useful solver behavior
 and reference oracles; they do not establish that Isaac Lab's USD, Python configuration, and runtime-write paths
 set the intended values. The Isaac Lab tests must exercise those paths directly.
+
+### 2026-08-03 develop refresh stocktake
+
+The validation branch was refreshed by merging Isaac Lab `develop` commit
+`ac0386328129f8694272c68b5a5d6e05d6fd1836` in merge commit
+`edd228345a0da945bcfc6b3d27189fbce90a3473`. The merge retained Newton commit
+`01d43e0646fa551d6113a0fa58c79071fcaf7d8d` while incorporating the inverse-mass and inverse-inertia
+synchronization from [IsaacLab#6799](https://github.com/isaac-sim/IsaacLab/pull/6799). The existing COM-cache
+invalidation work from [IsaacLab#6689](https://github.com/isaac-sim/IsaacLab/pull/6689) was preserved.
+
+The complete Newton parameter-validation suite was run three consecutive times on an NVIDIA GeForce RTX 5090.
+Every run produced the same result: **300 passed, 33 expected failures, and 3 strict expected-pass failures**
+out of 336 tests. The strict expected passes physically demonstrate that the runtime inverse-property defect
+tracked by [IsaacLab#6518](https://github.com/isaac-sim/IsaacLab/issues/6518) is fixed:
+
+- `test_free_body.py::test_body_01_mass_wrench_response[kamino-runtime]` (`BODY-01`)
+- `test_free_body.py::test_body_02_inertia_wrench_response[0-kamino-runtime]` (`BODY-02`)
+- `test_free_body.py::test_body_02_inertia_wrench_response[1-kamino-runtime]` (`BODY-02`)
+
+The corresponding cache and inverse-property merge regressions passed in isolated processes: four
+`TestRigidObjectComSetterCacheInvalidation` cases, four `TestCollectionComSetterCacheInvalidation` cases, two
+`test_rigid_body_set_mass` cases, and two `test_set_body_inertial_properties_updates_inverses` cases. A combined
+multi-module invocation exited with signal 11 before collection output, but every target passed when isolated;
+this is classified as a launcher/process-teardown interaction rather than a demonstrated production regression.
+
+The 33 expected failures also reproduced identically in all three runs:
+
+- `MAT-04`: `test_mat_04_restitution_first_rebound[{kamino,mjwarp}-{usd,cfg,runtime}]` (6 cases).
+- `CONTACT-01`: `test_contact_01_margin_controls_resting_separation[mjwarp-{usd,cfg,runtime}]` (3 cases).
+- `JOINT-05`: `test_joint_05_velocity_limit_sustained_drive_and_braking`
+  with `[{kamino,mjwarp}-{usd,cfg,runtime}-{revolute,prismatic}]` (12 cases).
+- `JOINT-06`: `test_joint_06_effort_limit_clamps_drive_response[kamino-{usd,cfg,runtime}-{revolute,prismatic}]`
+  (6 cases).
+- `JOINT-09`: `test_joint_09_dry_friction_decelerates_unforced_motion[kamino-{usd,cfg,runtime}]` and
+  `test_joint_09_dry_friction_holds_at_rest_below_breakaway_effort[kamino-{usd,cfg,runtime}]` (6 cases).
+
+No newly broken physical behavior was found. The current upstream status is:
+
+- [IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517),
+  [IsaacLab#6518](https://github.com/isaac-sim/IsaacLab/issues/6518), and
+  [IsaacLab#6649](https://github.com/isaac-sim/IsaacLab/issues/6649) are closed through merged
+  [IsaacLab#6799](https://github.com/isaac-sim/IsaacLab/pull/6799).
+  [IsaacLab#6689](https://github.com/isaac-sim/IsaacLab/pull/6689) remains open.
+- [newton-physics/newton#161](https://github.com/newton-physics/newton/issues/161) and
+  [newton-physics/newton#2106](https://github.com/newton-physics/newton/issues/2106) are closed;
+  [newton-physics/newton#3588](https://github.com/newton-physics/newton/pull/3588) and
+  [newton-physics/newton#3605](https://github.com/newton-physics/newton/pull/3605) are merged and precede the
+  pinned Newton revision. Closure of Newton #2106 did not resolve the `CONTACT-01` physical expected failures.
+- [vastsoun/newton#385](https://github.com/vastsoun/newton/issues/385) is closed.
+  [vastsoun/newton#375](https://github.com/vastsoun/newton/issues/375),
+  [vastsoun/newton#383](https://github.com/vastsoun/newton/issues/383),
+  [vastsoun/newton#397](https://github.com/vastsoun/newton/issues/397), and
+  [vastsoun/newton#398](https://github.com/vastsoun/newton/issues/398) remain open and their detecting tests
+  still reproduce.
+
+Issue closure alone was not counted as physical coverage in this stocktake. At this point, `JOINT-08`
+Python/runtime tests, target-mode verification from a zero-gain USD baseline, and stale strict expected-failure
+cleanup remained follow-up work. The completion record below supersedes those pending dispositions.
+
+### 2026-08-03 follow-up completion
+
+The stocktake follow-up completed the three deferred test changes without modifying production code:
+
+- Removed the three stale strict expected-failure marks for Kamino runtime `BODY-01` and `BODY-02`.
+- Replaced non-zero USD gain and armature seeds with zero-gain USD baselines. Python configuration now declares
+  the required target mode before finalization, and runtime cases write a distinct target value afterward.
+- Added `JOINT-08` Python override and runtime physical coverage on both Newton backends for revolute and
+  prismatic joints. Runtime cases predeclare non-zero passive-damping topology through Python configuration
+  because Kamino rejects zero-to-nonzero dynamic-constraint topology changes in place.
+
+The 24 new `JOINT-08` cases and all existing tests passed in three consecutive complete runs. Each run collected
+360 tests and produced **327 passed, 33 expected failures, and 0 failures**. The 33 expected failures are the same
+`MAT-04`, `CONTACT-01`, `JOINT-05`, `JOINT-06`, and `JOINT-09` cases recorded above.
+
+Negative checks established that the coverage is behavior-sensitive: suppressing the config/runtime passive
+damping writes made representative Kamino and MJWarp `JOINT-08` trajectories fail their analytical oracle, and
+temporarily disabling the merged target-mode callback made all eight zero-USD `DRIVE-01` config cases fail.
+The three former strict expected passes now pass as ordinary tests. Focused target-mode and viscous-writer API
+regressions also passed (14 cases), as did 16 isolated COM-cache and inverse-property merge regressions.
 
 ### Terminology
 
@@ -181,8 +260,8 @@ storage-only tests remain `T`.
 | SIM-01 | Gravity vector | T / T / T | N / I / I | N / I / I |
 | STATE-01 | Initial/reset link pose | T / T / T | I / I / I | I / I / I |
 | STATE-02 | Initial/reset COM spatial velocity | T / T / T | I / I / I | I / I / I |
-| BODY-01 | Mass | T / T / T | I / I / I | I / I / X |
-| BODY-02 | Inertia tensor and inertial-frame orientation | T / N / T | I / N / I | I / N / X |
+| BODY-01 | Mass | T / T / T | I / I / I | I / I / I |
+| BODY-02 | Inertia tensor and inertial-frame orientation | T / N / T | I / N / I | I / N / I |
 | BODY-03 | Center-of-mass position | T / N / T | I / N / I | I / N / I |
 | SHAPE-01 | Shape transform relative to body | T / T / N | I / I / N | I / I / N |
 | SHAPE-02 | Shape scale or dimensions | T / T / E | I / I / E | I / I / E |
@@ -199,7 +278,7 @@ storage-only tests remain `T`.
 | JOINT-05 | Velocity limit | T / T / T | X / X / X | X / X / X |
 | JOINT-06 | Effort limit | T / T / T | I / I / I | X / X / X |
 | JOINT-07 | Armature | T / T / T | I / I / I | I / I / I |
-| JOINT-08 | Passive joint damping | T / T / T | I / T / T | I / T / T |
+| JOINT-08 | Passive joint damping | T / T / T | I / I / I | I / I / I |
 | JOINT-09 | Joint dry-friction force/torque | T / T / T | I / I / I | X / X / X |
 | DRIVE-01 | Implicit drive stiffness | T / T / T | I / I / I | I / I / I |
 | DRIVE-02 | Implicit drive damping | T / T / T | I / I / I | I / I / I |
@@ -260,7 +339,6 @@ implemented. Related issues provide implementation context but do not satisfy `R
 | `JOINT-05` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#397](https://github.com/vastsoun/newton/issues/397) | [newton-physics/newton#161](https://github.com/newton-physics/newton/issues/161) added model storage; does not establish Kamino enforcement |
 | `JOINT-06` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#398](https://github.com/vastsoun/newton/issues/398) | [newton-physics/newton#161](https://github.com/newton-physics/newton/issues/161) added model storage; does not establish Kamino enforcement |
 | `JOINT-09` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#383](https://github.com/vastsoun/newton/issues/383) | None |
-| `BODY-01`, `BODY-02` | Newton-Kamino: runtime | [IsaacLab#6518](https://github.com/isaac-sim/IsaacLab/issues/6518) | Strict xfails in the wrench-response tests; `set_masses_index` / `set_inertias_index` update public storage and notify `BODY_INERTIAL_PROPERTIES` but leave `body_inv_mass` / `body_inv_inertia` stale |
 | `MAT-04` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#375](https://github.com/vastsoun/newton/issues/375) | Positive-gap contacts enter the shared `DualProblem` velocity bias; stabilization (`d/Δt`) and restitution combine while surfaces are still separated, suppressing rebound. Reproduces for PADMM and DVI and through both Newton and Kamino collision pipelines. [Upstream rebound evidence](https://github.com/newton-physics/newton/pull/3588) uses zero gap. |
 | `MAT-04` | Newton-MJWarp: USD, Python, runtime | Accepted Phase 2 gap; owner: Newton/MJWarp integration maintainers | The production-default MuJoCo-contact path consumes the public restitution value but produces no rebound relative to an inelastic control; rebound is generated by compliant `solref`/`solimp` rather than `ShapeConfig.restitution`, and gap does not affect the measured rebound |
 | `CONTACT-01` | Newton-MJWarp: USD, Python, runtime | [newton-physics/newton#2106](https://github.com/newton-physics/newton/issues/2106) | MuJoCo contacts zero Newton shape margins, so public rest-offset writes do not change physical resting separation |
@@ -277,33 +355,32 @@ commit. Runtime writes are implemented after [IsaacLab#6689](https://github.com/
 invalidated the derived world COM cache in `RigidObject.set_coms_index`; the correction is independent of
 Kamino's `BODY_INERTIAL_PROPERTIES` notification path.
 
+[IsaacLab#6518](https://github.com/isaac-sim/IsaacLab/issues/6518) is resolved by
+[IsaacLab#6799](https://github.com/isaac-sim/IsaacLab/pull/6799). The three Kamino runtime wrench-response cases
+strictly XPASSed in three consecutive stocktake runs, so `BODY-01` and `BODY-02` runtime are now `I`. Their
+strict expected-failure marks were removed in the follow-up and the cases now pass normally.
+
 [vastsoun/newton#385](https://github.com/vastsoun/newton/issues/385) is closed historical evidence for allocating
 Kamino's implicit joint-dynamics equations when gains may change at runtime. It explains the pre-allocation used
 by the existing `DRIVE-01`, `DRIVE-02`, and `JOINT-07` tests; it does not apply to the controller-owned gains in
 the explicit actuator integration rows.
 
-#### Temporary Newton target-mode workaround
+#### Newton target-mode post-closure verification
 
-[IsaacLab#6649](https://github.com/isaac-sim/IsaacLab/issues/6649) tracks that `ImplicitActuatorCfg` writes
-Newton stiffness and damping without authoring a compatible `joint_target_mode`. Newton infers this mode while
-importing the USD drive, so a zero-gain USD drive remains in `EFFORT` mode even when Python configuration or a
-runtime write later supplies non-zero gains. Kamino then stores and reports the new gains but omits the inactive
-position or velocity term from its dynamics; MJWarp cannot create the missing target-actuator topology after
-solver construction.
-
-Until the issue is resolved, the Kamino single-DOF test authors a non-zero USD stiffness and/or damping for
-Python-configuration and runtime cases solely to establish the required target mode before solver construction.
-The configured or runtime value remains the parameter under test. Runtime armature cases similarly author a
-smaller non-zero armature to preserve dynamic-constraint topology. Remove these seed values when
-`ImplicitActuatorCfg` explicitly establishes the target mode, then rerun all three authoring paths from a
-zero-gain USD baseline. This workaround is test scaffolding, not evidence that an otherwise incompatible USD
-drive is supported.
+[IsaacLab#6649](https://github.com/isaac-sim/IsaacLab/issues/6649) is closed by
+[IsaacLab#6799](https://github.com/isaac-sim/IsaacLab/pull/6799). Current `develop` configures Newton builder
+target modes from the effective implicit-actuator gains before model finalization. The follow-up removed
+non-zero USD stiffness, damping, and armature seeds from Python-configuration and runtime cases. Configuration
+cases now establish their target mode directly from `ImplicitActuatorCfg`; runtime cases use a smaller,
+mode-compatible configuration baseline and then write the distinct target value through the public runtime
+writer. This preserves required solver topology while demonstrating all three authoring paths from a zero-gain
+USD baseline.
 
 For `CMD-02`, the test authors zero stiffness and non-zero damping so Newton imports the drive in pure
 `VELOCITY` mode. This validates the public velocity-target command without requiring
 `force_position_velocity_actuation=True` on `builder.add_usd()`. It does not establish that the importer selects
-combined `POSITION_VELOCITY` mode when both gains are non-zero; that remains part of the target-mode integration
-tracked by [IsaacLab#6649](https://github.com/isaac-sim/IsaacLab/issues/6649).
+combined `POSITION_VELOCITY` mode when both gains are non-zero; that scenario remains part of the post-closure
+verification for [IsaacLab#6649](https://github.com/isaac-sim/IsaacLab/issues/6649).
 
 ### Planned physical-behavior tests
 
@@ -521,7 +598,7 @@ but are not the action under test.
 | Shape dimensions | USD geometry or spawn/schema configuration | `randomize_rigid_body_scale` before simulation only; an after-start call is an error-path case |
 | Materials | USD material binding or material configuration | `randomize_rigid_body_material` |
 | Collider offsets | USD/PhysX/Newton collision schemas | `randomize_rigid_body_collider_offsets` |
-| Joint limits/properties | USD joint/drive schemas and `ImplicitActuatorCfg` | `write_joint_position_limit_to_sim_index`, `write_joint_velocity_limit_to_sim_index`, `write_joint_effort_limit_to_sim_index`, `write_joint_armature_to_sim_index`, `write_joint_stiffness_to_sim_index`, and `write_joint_damping_to_sim_index` |
+| Joint limits/properties | USD joint/drive schemas and `ImplicitActuatorCfg` | `write_joint_position_limit_to_sim_index`, `write_joint_velocity_limit_to_sim_index`, `write_joint_effort_limit_to_sim_index`, `write_joint_armature_to_sim_index`, `write_joint_stiffness_to_sim_index`, `write_joint_damping_to_sim_index`, and `write_joint_viscous_friction_coefficient_to_sim_index` |
 | Joint commands | Not persistent authored parameters | `set_joint_effort_target_index`, `set_joint_position_target_index`, and `set_joint_velocity_target_index`, followed by `write_data_to_sim` |
 | Explicit actuator gains | Actuator configuration | `write_actuator_stiffness_to_sim` and `write_actuator_damping_to_sim` |
 
@@ -545,11 +622,12 @@ API tests unless a mask-only graphed pipeline has distinct physical behavior.
   writes (`JOINT-04`) are implemented only for in-place edits to existing finite limits, mirroring the Kamino
   `FIX-LIMIT-POS` coverage; the topology-change (unlimited-to-limited) error path remains Kamino-only, matching
   the existing `CMD-01` precedent of not applying Kamino's reconstruction-error behavior to MJWarp. MJWarp
-  `JOINT-08` USD-authored passive damping is implemented; its Python override and runtime paths are blocked by
-  the same [IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517) gap as Kamino, because
-  `write_joint_damping_to_sim_index` and `ImplicitActuatorCfg` write Newton's `joint_target_kd` (drive damping)
-  on both Newton backends and no public API currently exposes `Model.joint_damping` (passive damping)
-  separately.
+  All three `JOINT-08` authoring paths are implemented after
+  [IsaacLab#6799](https://github.com/isaac-sim/IsaacLab/pull/6799) exposed
+  `ImplicitActuatorCfg.viscous_friction` and
+  `write_joint_viscous_friction_coefficient_to_sim_index`, which map separately to Newton's passive
+  `Model.joint_damping`. Runtime tests use a non-zero configuration baseline because changing the existence of
+  Kamino passive-damping topology in place is unsupported.
 - **Newton-Kamino:** blocked joint-friction cells (`JOINT-09`) remain `X`; tests must not encode silent or
   ineffective writes as expected behavior. Explicit actuator rows (`ACT-01`, `ACT-02`) remain `T` until
   end-to-end physical coverage exists. Contact combined `mu` (`MAT-03`) is in scope and requires the same
@@ -635,19 +713,16 @@ disposition before Phase 5 begins.
      `source/isaaclab/isaaclab/test/physics/parameter_validation/fixtures.py` and `oracles.py`; Kamino launch,
      profiles, and public API adapters remain in
      `source/isaaclab_newton/test/physics/parameter_validation/conftest.py`.
-   - **Phase 1b — deepen Kamino coverage (complete except `JOINT-08`):** `FIX-FREE-FALL`,
+   - **Phase 1b — deepen Kamino coverage (complete):** `FIX-FREE-FALL`,
      `FIX-JOINT-STATE`, `FIX-WRENCH-LIN`, `FIX-WRENCH-ANG`, and `FIX-COM` were implemented on Kamino using the
-     pinned `PROFILE-DOF` and `PROFILE-FREE` oracles. Kamino `JOINT-08` Python override and runtime paths remain
-     pending [IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517), which must expose passive joint
-     damping separately from implicit drive damping.
-   - **Phase 1c — port to MJWarp in batches (complete except `JOINT-08`):** replicate validated fixture
+     pinned `PROFILE-DOF` and `PROFILE-FREE` oracles. All Kamino `JOINT-08` paths are implemented.
+   - **Phase 1c — port to MJWarp in batches (complete):** replicate validated fixture
      contracts horizontally onto Newton-MJWarp only. `FIX-DOF-STEP` and the existing Phase 0 Kamino cases were
      ported first because they are the highest matrix ROI and upstream Newton evidence already exists.
      `FIX-FREE-FALL`, `FIX-JOINT-STATE`, `FIX-WRENCH-LIN`, `FIX-WRENCH-ANG`, and `FIX-COM` were then ported one
      fixture at a time, reusing the shared free-body and single-DOF checkpoint tolerances rather than the
      tighter per-backend implicitFast joint-step tolerance, since the tolerance policy treats free-body
-     checkpoints as backend-agnostic. MJWarp `JOINT-08` Python override and runtime paths remain pending
-     [IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517), the same blocker as Kamino.
+     checkpoints as backend-agnostic. All MJWarp `JOINT-08` paths are implemented.
 
    Do not copy the monolithic Kamino test file into the MJWarp package. The MJWarp adapter should invoke the
    same fixture contract and assert against its own documented oracle.
@@ -655,10 +730,9 @@ disposition before Phase 5 begins.
    and offset fixtures are implemented for Newton-MJWarp and Newton-Kamino. Strict expected failures remain for
    Kamino restitution ([vastsoun/newton#375](https://github.com/vastsoun/newton/issues/375)), MJWarp
    restitution, and contact margins on MJWarp.
-4. **Phase 3 — limits, frames, and passive effects (Newton only, complete except blocked passive-damping
-   paths):** position/velocity/effort limits, joint frames, passive damping, and backend-specific joint friction
-   are covered for Newton-MJWarp and Newton-Kamino. `JOINT-08` Python override and runtime coverage remains
-   blocked by [IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517).
+4. **Phase 3 — limits, frames, and passive effects (Newton only, complete):**
+   position/velocity/effort limits, joint frames, passive damping, and backend-specific joint friction are
+   covered for Newton-MJWarp and Newton-Kamino.
 5. **Phase 4 — blocked Newton runtime contracts:** convert Newton-MJWarp and Newton-Kamino `X` cells to `E` or
    `T` as backend defects are resolved. Deferred constraints, tendons, and OVPhysX require a separate design
    revision.
@@ -674,18 +748,17 @@ Phase 0 test classification is implemented for `DRIVE-01`, `DRIVE-02`, `JOINT-04
 out-of-scope gap with no Isaac Lab issue. Kamino and MJWarp `JOINT-04` runtime in-place limit edits are
 implemented; the topology-change error path is covered by the existing `runtime-error` case on Kamino only,
 mirroring the `CMD-01` precedent of not applying Kamino's reconstruction-error behavior to MJWarp. Kamino and
-MJWarp `JOINT-08` USD authoring is implemented; Python override and runtime paths remain `T` on both backends
-until [IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517) exposes passive joint damping
-(`Model.joint_damping`) separately from implicit drive damping (`Model.joint_target_kd`), since both
-`write_joint_damping_to_sim_index` and `ImplicitActuatorCfg` write only the drive-damping array today,
-independent of the selected Newton solver.
+MJWarp `JOINT-08` USD, Python override, and runtime authoring are implemented. Isaac Lab #6799 exposes passive
+damping through
+`ImplicitActuatorCfg.viscous_friction` and `write_joint_viscous_friction_coefficient_to_sim_index` separately
+from implicit drive damping (`Model.joint_target_kd`).
 
 Phase 1a, all of Phase 1b, and Phase 1c are implemented under
 `source/isaaclab_newton/test/physics/parameter_validation/`. The shared importable fixture and oracle modules
 live under `source/isaaclab/isaaclab/test/physics/parameter_validation/`. The MJWarp Phase 1c batches implement,
-in order: all authoring paths for `DRIVE-01`, `DRIVE-02`, and `JOINT-07`; the `CMD-01` feed-forward effort and
+in order: all authoring paths for `DRIVE-01`, `DRIVE-02`, `JOINT-07`, and `JOINT-08`; the `CMD-01` feed-forward effort and
 `CMD-02` velocity-target runtime command paths; the `usd`/`runtime` in-place authoring paths for `JOINT-04` and
-the `usd` authoring path for `JOINT-08`; the `FIX-FREE-FALL` fixture (`SIM-01` cfg/runtime, `STATE-01`,
+the `FIX-FREE-FALL` fixture (`SIM-01` cfg/runtime, `STATE-01`,
 `STATE-02`); the `FIX-WRENCH-LIN`/`FIX-WRENCH-ANG` fixtures (`BODY-01`, `BODY-02`); the `FIX-COM` fixture's
 force-response and fixed-pivot gravity-moment variants (`BODY-03`); and the `FIX-JOINT-STATE` fixture
 (`JOINT-02`, `JOINT-03`). All single-DOF batches use the pinned collision-free implicitFast profile and
@@ -694,9 +767,8 @@ implicitFast one-step oracle; the free-body batches reuse the shared free-body c
 backend-agnostic treatment of free-body checkpoints. The command and position-limit batches retain Kamino's
 topology-change error cases separately rather than applying Kamino's reconstruction-error behavior to MJWarp.
 Kamino and MJWarp physical coverage implement the `I` cells for `SIM-01`, `STATE-01`, `STATE-02`, `BODY-01`,
-`BODY-02`, `BODY-03`, `JOINT-02`, and `JOINT-03` on both backends; `BODY-01` and `BODY-02` runtime `X` cells
-remain Kamino-only and retain strict expected-failure coverage in the `X`-cell register, since MJWarp's
-`set_masses_index`/`set_inertias_index` runtime writers do not share Kamino's stale-inverse-mass defect.
+`BODY-02`, `BODY-03`, `JOINT-02`, and `JOINT-03` on both backends. The former Kamino runtime `BODY-01` and
+`BODY-02` defects are physically resolved and their stale strict expected-failure marks have been removed.
 `STATE-01` USD authoring passes after the fixture supplies `translation` and `orientation` to
 `sim_utils.create_prim` directly, rather than calling :class:`pxr.UsdGeom.XformCommonAPI` after
 `create_prim` has standardized the transform stack. `STATE-02` USD authoring passes after the fixture converts
@@ -727,8 +799,7 @@ the Kamino gap tracked by [vastsoun/newton#398](https://github.com/vastsoun/newt
 `FIX-PASSIVE` implements all three MJWarp dry-friction paths using Newton's absolute force/torque semantics and
 detects the Kamino revolute-joint gap tracked by
 [vastsoun/newton#383](https://github.com/vastsoun/newton/issues/383). USD passive damping remains implemented
-on both backends; its Python and runtime paths remain blocked by
-[IsaacLab#6517](https://github.com/isaac-sim/IsaacLab/issues/6517).
+on both backends; Python and runtime passive damping are also implemented after Isaac Lab #6799.
 
 The appropriate CI selection, gating policy, and scheduling are intentionally left to the implementation
 change. Contact tests are likely to be less reliable in CI because their thresholds depend on integrator,

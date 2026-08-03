@@ -40,7 +40,6 @@ KAMINO_ATOL = 2.0e-4
 MJWARP_RTOL = 2.0e-4
 MJWARP_ATOL = 2.0e-5
 BASE_STIFFNESS = 100.0
-BASE_DAMPING = 10.0
 
 
 class _SingleDofParameterAdapter:
@@ -76,7 +75,7 @@ class _SingleDofParameterAdapter:
         effort: float = 0.0,
         position: float = 0.0,
         velocity: float = 0.0,
-        passive_damping: float = 0.0,
+        passive_damping: float | None = None,
         effort_limit: float | None = None,
         velocity_limit: float | None = None,
         friction: float | None = None,
@@ -94,6 +93,7 @@ class _SingleDofParameterAdapter:
         effort_limit_spec = self._scalar_authoring_spec(authoring, effort_limit, 1.0e9)
         velocity_limit_spec = self._scalar_authoring_spec(authoring, velocity_limit, None)
         friction_spec = self._scalar_authoring_spec(authoring, friction, 0.0)
+        passive_damping_spec = self._passive_damping_authoring_spec(authoring, passive_damping)
 
         with build_simulation_context(device=DEVICE, sim_cfg=self.profile_dof_cfg()) as sim:
             sim._app_control_on_stop_handle = None
@@ -102,7 +102,7 @@ class _SingleDofParameterAdapter:
                 usd_stiffness=usd_stiffness,
                 usd_drive_damping=usd_damping,
                 usd_armature=usd_armature,
-                usd_passive_damping=passive_damping,
+                usd_passive_damping=passive_damping_spec["usd"],
                 usd_effort_limit=effort_limit_spec["usd"],
                 usd_velocity_limit=velocity_limit_spec["usd"],
                 usd_friction=friction_spec["usd"],
@@ -115,15 +115,19 @@ class _SingleDofParameterAdapter:
                     effort_limit_sim=effort_limit_spec["cfg"],
                     velocity_limit_sim=velocity_limit_spec["cfg"],
                     friction=friction_spec["cfg"],
+                    viscous_friction=passive_damping_spec["cfg"],
                 )
             )
             sim.reset()
             articulation.update(0.0)
             body_inertia = float(articulation.data.mass_matrix.torch[0, 0, 0])
 
-            has_property_runtime = any(
-                property_spec["runtime"] is not None
-                for property_spec in (effort_limit_spec, velocity_limit_spec, friction_spec)
+            has_property_runtime = (
+                any(
+                    property_spec["runtime"] is not None
+                    for property_spec in (effort_limit_spec, velocity_limit_spec, friction_spec, passive_damping_spec)
+                )
+                or spec["runtime"] is not None
             )
             if has_property_runtime:
                 sim.step()
@@ -143,6 +147,10 @@ class _SingleDofParameterAdapter:
             if friction_spec["runtime"] is not None:
                 articulation.write_joint_friction_coefficient_to_sim_index(
                     joint_friction_coeff=friction_spec["runtime"]
+                )
+            if passive_damping_spec["runtime"] is not None:
+                articulation.write_joint_viscous_friction_coefficient_to_sim_index(
+                    joint_viscous_friction_coeff=passive_damping_spec["runtime"]
                 )
 
             articulation.write_joint_position_to_sim_index(position=torch.full((1, 1), position, device=DEVICE))
@@ -420,9 +428,6 @@ class _SingleDofParameterAdapter:
         damping: float,
         armature: float,
     ) -> dict:
-        # Non-zero USD gains establish Newton target mode until IsaacLab#6649 is resolved.
-        usd_stiffness = BASE_STIFFNESS if stiffness > 0.0 else 0.0
-        usd_damping = BASE_DAMPING if damping > 0.0 else 0.0
         if authoring == "usd":
             return {
                 "usd": (stiffness, damping, armature),
@@ -431,21 +436,21 @@ class _SingleDofParameterAdapter:
             }
         if authoring == "cfg":
             return {
-                "usd": (usd_stiffness, usd_damping, 0.0),
+                "usd": (0.0, 0.0, 0.0),
                 "cfg": (stiffness, damping, armature),
                 "runtime": None,
             }
         if authoring == "runtime":
             return {
-                "usd": (usd_stiffness, usd_damping, armature / 10.0),
-                "cfg": (None, None, None),
+                "usd": (0.0, 0.0, 0.0),
+                "cfg": (stiffness / 10.0, damping / 10.0, 0.0),
                 "runtime": (stiffness, damping, armature),
             }
         if authoring == "runtime-error":
             if stiffness == 0.0 and damping == 0.0 and armature == 0.0:
                 return {
-                    "usd": (BASE_STIFFNESS, 0.0, 0.0),
-                    "cfg": (None, None, None),
+                    "usd": (0.0, 0.0, 0.0),
+                    "cfg": (BASE_STIFFNESS, 0.0, 0.0),
                     "runtime": (0.0, 0.0, 0.0),
                 }
             return {
@@ -466,6 +471,19 @@ class _SingleDofParameterAdapter:
             return {"usd": usd_default, "cfg": value, "runtime": None}
         if authoring in {"runtime", "runtime-error"}:
             return {"usd": usd_default, "cfg": None, "runtime": value}
+        raise ValueError(f"Unknown authoring path: {authoring}")
+
+    @staticmethod
+    def _passive_damping_authoring_spec(authoring: str, value: float | None) -> dict:
+        """Resolve passive damping while preserving Kamino's runtime constraint topology."""
+        if value is None:
+            return {"usd": 0.0, "cfg": None, "runtime": None}
+        if authoring == "usd":
+            return {"usd": value, "cfg": None, "runtime": None}
+        if authoring == "cfg":
+            return {"usd": 0.0, "cfg": value, "runtime": None}
+        if authoring == "runtime":
+            return {"usd": 0.0, "cfg": value / 10.0, "runtime": value}
         raise ValueError(f"Unknown authoring path: {authoring}")
 
     @staticmethod
