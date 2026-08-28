@@ -212,7 +212,7 @@ torchaudio = "2.11.0"
 ovphysx = "0.5.10"
 ovrtx = "0.4.1.364340"
 ovstage = "0.1.1.355824"
-newton = "release-1.5"
+newton = "9479f5ab339249569bf353d7c0ea59802d696326"
 warp = "1.16.0"
 
 [tool.ruff]
@@ -395,9 +395,9 @@ override-dependencies = [
     "numpy>=2",
     "mujoco~=3.11.0",
     "mujoco-warp~=3.11.0",
-    "newton[sim] @ git+https://github.com/newton-physics/newton.git@release-1.5",
+    "newton[sim] @ git+https://github.com/newton-physics/newton.git@9479f5ab339249569bf353d7c0ea59802d696326",
     # Force the Newton-matched schemas over isaacsim's ==0.2.0 pin.
-    "newton-usd-schemas>=0.4.1",
+    "newton-usd-schemas>=0.5.0",
     "torch==2.11.0",
     "torchvision==0.26.0",
     "torchaudio==2.11.0",
