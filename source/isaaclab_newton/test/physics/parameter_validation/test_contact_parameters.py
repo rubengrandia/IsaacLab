@@ -54,20 +54,13 @@ _GRAVITY = 9.81
 _GROUND_SIZE = (4.0, 4.0, 0.1)
 _GROUND_TOP = 0.0
 _CONTACT_FORCE_THRESHOLD = 0.1
-_KAMINO_RESTITUTION_REASON = (
-    "Accepted gap (Newton/Kamino integration): the selected Newton CollisionPipeline produces inelastic contacts"
-)
 _MJWARP_RESTITUTION_REASON = (
     "Accepted gap (Newton-MJWarp integration): the default MuJoCo-contact path does not turn the public "
     "Newton restitution value into a rebound"
 )
 _CONTACT_BACKENDS = [pytest.param("kamino", id="kamino"), pytest.param("mjwarp", id="mjwarp")]
 _RESTITUTION_BACKENDS = [
-    pytest.param(
-        "kamino",
-        id="kamino",
-        marks=pytest.mark.xfail(strict=True, reason=_KAMINO_RESTITUTION_REASON),
-    ),
+    pytest.param("kamino", id="kamino"),
     pytest.param(
         "mjwarp",
         id="mjwarp",
@@ -359,16 +352,20 @@ def _measure_rebound_height(parameter_adapter, authoring: str, restitution: floa
     ) as (sim, body, sensor, _):
         impact_seen = False
         apex = _GROUND_TOP + CONTACT_SPHERE_RADIUS
+        previous_velocity_z = float(body.data.root_com_lin_vel_w.torch[0, 2])
         for _ in range(600):
-            force = _step(sim, body, sensor)
+            _step(sim, body, sensor)
             velocity_z = float(body.data.root_com_lin_vel_w.torch[0, 2])
-            if force > _CONTACT_FORCE_THRESHOLD:
+            # Contact forces are reported after all solver substeps and may miss an impact that rebounds within
+            # one simulation step. The first downward-to-upward velocity transition identifies the same minimum.
+            if previous_velocity_z < 0.0 <= velocity_z:
                 impact_seen = True
             if impact_seen:
                 apex = max(apex, float(body.data.root_com_pos_w.torch[0, 2]))
                 if velocity_z < 0.0 and apex > _GROUND_TOP + CONTACT_SPHERE_RADIUS + 0.01:
                     break
-        assert impact_seen, "MAT-04: sphere never produced a contact observation"
+            previous_velocity_z = velocity_z
+        assert impact_seen, "MAT-04: sphere never reached its first post-impact minimum"
         return apex - _GROUND_TOP - CONTACT_SPHERE_RADIUS
 
 
