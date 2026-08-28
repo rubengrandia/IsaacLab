@@ -13,7 +13,7 @@ simulation_app = AppLauncher(headless=True).app
 import pytest
 import torch
 from isaaclab_newton.assets import Articulation
-from isaaclab_newton.physics import KaminoSolverCfg, MJWarpSolverCfg, NewtonCfg
+from isaaclab_newton.physics import KaminoConstraintsCfg, KaminoPADMMCfg, KaminoPADMMSolverCfg, MJWarpSolverCfg, NewtonCfg
 
 from isaaclab.sim import SimulationCfg, build_simulation_context
 from isaaclab.test.physics.parameter_validation.fixtures import (
@@ -531,18 +531,18 @@ class KaminoParameterAdapter(_SingleDofParameterAdapter):
             gravity=gravity,
             device=DEVICE,
             physics=NewtonCfg(
-                solver_cfg=KaminoSolverCfg(
+                solver_cfg=KaminoPADMMSolverCfg(
                     integrator="moreau",
                     use_collision_detector=False,
-                    constraints_alpha=0.1,
-                    constraints_beta=0.01,
-                    constraints_gamma=0.01,
-                    padmm_max_iterations=100,
-                    padmm_primal_tolerance=1.0e-4,
-                    padmm_dual_tolerance=1.0e-4,
-                    padmm_compl_tolerance=1.0e-4,
-                    padmm_rho_0=0.05,
-                    padmm_use_graph_conditionals=False,
+                    constraints=KaminoConstraintsCfg(alpha=0.1, beta=0.01, gamma=0.01),
+                    dynamics_solver_cfg=KaminoPADMMCfg(
+                        max_iterations=100,
+                        primal_tolerance=1.0e-4,
+                        dual_tolerance=1.0e-4,
+                        compl_tolerance=1.0e-4,
+                        rho_0=0.05,
+                        use_graph_conditionals=False,
+                    ),
                     max_contacts_per_world=32,
                 ),
                 num_substeps=self.contact_substeps,
@@ -567,10 +567,9 @@ class KaminoParameterAdapter(_SingleDofParameterAdapter):
             gravity=gravity,
             device=DEVICE,
             physics=NewtonCfg(
-                solver_cfg=KaminoSolverCfg(
+                solver_cfg=KaminoPADMMSolverCfg(
                     integrator="euler",
-                    constraints_alpha=alpha,
-                    constraints_beta=beta,
+                    constraints=KaminoConstraintsCfg(alpha=alpha, beta=beta),
                 ),
                 num_substeps=1,
                 use_cuda_graph=False,
