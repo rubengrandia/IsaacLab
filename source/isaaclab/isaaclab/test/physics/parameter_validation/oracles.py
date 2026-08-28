@@ -91,11 +91,13 @@ def predict_implicit_joint_step(
     dt: float = PROFILE_DOF_DT,
 ) -> tuple[float, float]:
     """Predict one implicit semi-Euler step for a fixed-base single-DOF joint."""
+    requested_effort = effort + stiffness * (position_target - position) + drive_damping * velocity_target
+    drive_effort = clamp_joint_effort(requested_effort, effort_limit)
+    if abs(requested_effort) > effort_limit:
+        # A saturated implicit-PD drive becomes a constant bounded effort.
+        stiffness = 0.0
+        drive_damping = 0.0
     effective_inertia = body_inertia + armature + dt * (drive_damping + passive_damping) + dt * dt * stiffness
-    drive_effort = clamp_joint_effort(
-        effort + stiffness * (position_target - position) + drive_damping * velocity_target,
-        effort_limit,
-    )
     velocity_next = ((body_inertia + armature) * velocity + dt * drive_effort) / effective_inertia
     return velocity_next, position + dt * velocity_next
 

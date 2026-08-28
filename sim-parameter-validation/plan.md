@@ -3,7 +3,7 @@
 **Status:** Newton validation follow-up complete; Phase 4 gaps and PhysX remain
 **Backends in v1:** `isaaclab_physx`, Newton-MJWarp, Newton-Kamino
 **Deferred backends:** `isaaclab_ovphysx`
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-28
 
 The goal of this document is to outline a set of tests that validate that Isaac Lab correctly sets physical
 parameters in its simulation backends. The simulator should be treated as a black box: each test should use a
@@ -14,6 +14,26 @@ rather than real-world validation. This document uses "physical validation" for 
 but preserves that distinction when citing Newton tests. Existing Newton tests establish useful solver behavior
 and reference oracles; they do not establish that Isaac Lab's USD, Python configuration, and runtime-write paths
 set the intended values. The Isaac Lab tests must exercise those paths directly.
+
+### 2026-08-28 Newton main stocktake
+
+The validation branch was rebased onto Isaac Lab `develop` and pinned to Newton main commit
+`9479f5ab339249569bf353d7c0ea59802d696326`. Kamino joint effort limits (`JOINT-06`) and dry friction
+(`JOINT-09`) are now implemented upstream; the matrix promotes both Newton-Kamino rows from `X` to `I`, and
+the stale strict expected-failure marks on their detecting tests were removed.
+
+One complete run on an NVIDIA GeForce RTX 5090 collected 360 tests and produced **339 passed and 21 expected
+failures** once the Kamino `JOINT-06` and `JOINT-09` marks were cleared. The remaining 21 expected failures are:
+
+- `MAT-04`: `test_mat_04_restitution_first_rebound[{kamino,mjwarp}-{usd,cfg,runtime}]` (6 cases).
+- `CONTACT-01`: `test_contact_01_margin_controls_resting_separation[mjwarp-{usd,cfg,runtime}]` (3 cases).
+- `JOINT-05`: `test_joint_05_velocity_limit_sustained_drive_and_braking`
+  with `[{kamino,mjwarp}-{usd,cfg,runtime}-{revolute,prismatic}]` (12 cases).
+
+[vastsoun/newton#383](https://github.com/vastsoun/newton/issues/383) and
+[vastsoun/newton#398](https://github.com/vastsoun/newton/issues/398) are resolved by the pinned Newton revision;
+their former Kamino matrix cells are now `I`. [vastsoun/newton#397](https://github.com/vastsoun/newton/issues/397)
+remains open for Kamino velocity-limit enforcement (`JOINT-05`).
 
 ### 2026-08-03 develop refresh stocktake
 
@@ -276,10 +296,10 @@ storage-only tests remain `T`.
 | JOINT-03 | Reset/live joint velocity | N / T / T | N / I / I | N / I / I |
 | JOINT-04 | Lower and upper position limits | T / N / T | I / N / I | I / N / I |
 | JOINT-05 | Velocity limit | T / T / T | X / X / X | X / X / X |
-| JOINT-06 | Effort limit | T / T / T | I / I / I | X / X / X |
+| JOINT-06 | Effort limit | T / T / T | I / I / I | I / I / I |
 | JOINT-07 | Armature | T / T / T | I / I / I | I / I / I |
 | JOINT-08 | Passive joint damping | T / T / T | I / I / I | I / I / I |
-| JOINT-09 | Joint dry-friction force/torque | T / T / T | I / I / I | X / X / X |
+| JOINT-09 | Joint dry-friction force/torque | T / T / T | I / I / I | I / I / I |
 | DRIVE-01 | Implicit drive stiffness | T / T / T | I / I / I | I / I / I |
 | DRIVE-02 | Implicit drive damping | T / T / T | I / I / I | I / I / I |
 | CMD-01 | Feed-forward joint effort | N / N / T | N / N / I | N / N / I |
@@ -337,8 +357,6 @@ implemented. Related issues provide implementation context but do not satisfy `R
 |---|---|---|---|
 | `JOINT-05` | Newton-MJWarp: USD, Python, runtime | No Isaac Lab issue (out of scope) | MJWarp is maintained by [newton-physics/newton](https://github.com/newton-physics/newton); Isaac Lab does not intend to fix velocity-limit enforcement on this solver. The `X` disposition records the known gap only. |
 | `JOINT-05` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#397](https://github.com/vastsoun/newton/issues/397) | [newton-physics/newton#161](https://github.com/newton-physics/newton/issues/161) added model storage; does not establish Kamino enforcement |
-| `JOINT-06` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#398](https://github.com/vastsoun/newton/issues/398) | [newton-physics/newton#161](https://github.com/newton-physics/newton/issues/161) added model storage; does not establish Kamino enforcement |
-| `JOINT-09` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#383](https://github.com/vastsoun/newton/issues/383) | None |
 | `MAT-04` | Newton-Kamino: USD, Python, runtime | [vastsoun/newton#375](https://github.com/vastsoun/newton/issues/375) | Positive-gap contacts enter the shared `DualProblem` velocity bias; stabilization (`d/Δt`) and restitution combine while surfaces are still separated, suppressing rebound. Reproduces for PADMM and DVI and through both Newton and Kamino collision pipelines. [Upstream rebound evidence](https://github.com/newton-physics/newton/pull/3588) uses zero gap. |
 | `MAT-04` | Newton-MJWarp: USD, Python, runtime | Accepted Phase 2 gap; owner: Newton/MJWarp integration maintainers | The production-default MuJoCo-contact path consumes the public restitution value but produces no rebound relative to an inelastic control; rebound is generated by compliant `solref`/`solimp` rather than `ShapeConfig.restitution`, and gap does not affect the measured rebound |
 | `CONTACT-01` | Newton-MJWarp: USD, Python, runtime | [newton-physics/newton#2106](https://github.com/newton-physics/newton/issues/2106) | MuJoCo contacts zero Newton shape margins, so public rest-offset writes do not change physical resting separation |
@@ -628,14 +646,14 @@ API tests unless a mask-only graphed pipeline has distinct physical behavior.
   `write_joint_viscous_friction_coefficient_to_sim_index`, which map separately to Newton's passive
   `Model.joint_damping`. Runtime tests use a non-zero configuration baseline because changing the existence of
   Kamino passive-damping topology in place is unsupported.
-- **Newton-Kamino:** blocked joint-friction cells (`JOINT-09`) remain `X`; tests must not encode silent or
-  ineffective writes as expected behavior. Explicit actuator rows (`ACT-01`, `ACT-02`) remain `T` until
-  end-to-end physical coverage exists. Contact combined `mu` (`MAT-03`) is in scope and requires the same
-  static-threshold and stopping-distance fixtures as MJWarp. Position-limit runtime writes (`JOINT-04`) may
-  change existing finite limits in place; writes that change limit existence must assert the documented error.
-  Single-step joint cases use the pinned Kamino profile and oracle defined above. `SIM-01` USD is `N` for the
-  same Newton integration reason as MJWarp; Kamino cfg and runtime gravity cells are implemented in
-  `test_sim_01_gravity_vector`.
+- **Newton-Kamino:** Explicit actuator rows (`ACT-01`, `ACT-02`) remain `T` until end-to-end physical
+  coverage exists. Contact combined `mu` (`MAT-03`) is in scope and requires the same static-threshold and
+  stopping-distance fixtures as MJWarp. Kamino `JOINT-06` and `JOINT-09` are implemented on all three authoring
+  paths after upstream effort-limit and dry-friction support landed in the pinned Newton revision. Position-limit
+  runtime writes (`JOINT-04`) may change existing finite limits in place; writes that change limit existence
+  must assert the documented error. Single-step joint cases use the pinned Kamino profile and oracle defined
+  above. `SIM-01` USD is `N` for the same Newton integration reason as MJWarp; Kamino cfg and runtime gravity
+  cells are implemented in `test_sim_01_gravity_vector`.
 
 ### Target test architecture
 
@@ -794,12 +812,10 @@ separated ([vastsoun/newton#375](https://github.com/vastsoun/newton/issues/375))
 Phase 3 is implemented in `test_joint_dynamics.py`. `FIX-JOINT-FRAME` covers parent/child frame rotations and
 translations through world-space link motion on both Newton backends; no independent Python override exists.
 The existing `FIX-LIMIT-POS` coverage remains unchanged. `FIX-LIMIT-VEL` now detects every USD/config/runtime
-`JOINT-05` gap with strict expected failures. `FIX-LIMIT-EFFORT` implements all three MJWarp paths and detects
-the Kamino gap tracked by [vastsoun/newton#398](https://github.com/vastsoun/newton/issues/398).
-`FIX-PASSIVE` implements all three MJWarp dry-friction paths using Newton's absolute force/torque semantics and
-detects the Kamino revolute-joint gap tracked by
-[vastsoun/newton#383](https://github.com/vastsoun/newton/issues/383). USD passive damping remains implemented
-on both backends; Python and runtime passive damping are also implemented after Isaac Lab #6799.
+`JOINT-05` gap with strict expected failures. `FIX-LIMIT-EFFORT` implements all three authoring paths on both
+Newton backends. `FIX-PASSIVE` implements all three dry-friction paths on both Newton backends using Newton's
+absolute force/torque semantics. USD passive damping remains implemented on both backends; Python and runtime
+passive damping are also implemented after Isaac Lab #6799.
 
 The appropriate CI selection, gating policy, and scheduling are intentionally left to the implementation
 change. Contact tests are likely to be less reliable in CI because their thresholds depend on integrator,
@@ -827,7 +843,8 @@ These decisions do not block the document structure, but each blocks promotion o
 | Kamino runtime position-limit topology changes | Newton/Kamino integration maintainer | Resolved for v1: in-place value edits are `I`; unlimited-to-limited (or reverse) at runtime raises documented error |
 | Kamino restitution positive-gap defect | Newton/Kamino integration maintainer | [vastsoun/newton#375](https://github.com/vastsoun/newton/issues/375) fixed upstream; Kamino `FIX-RESTITUTION` passes with gap-invariant rebound and oracle per [newton-physics/newton#3588](https://github.com/newton-physics/newton/pull/3588) |
 | MJWarp restitution Isaac Lab integration | Newton/MJWarp integration maintainer | `FIX-RESTITUTION` passes through Isaac Lab authoring paths with rebound above an inelastic control, or public API documents that restitution maps to a different MuJoCo parameter |
-| Kamino joint-friction mapping | Newton/Kamino integration maintainer | Dry-friction semantics implemented or public API documents a distinct viscous parameter |
+| Kamino joint-friction mapping | Newton/Kamino integration maintainer | Resolved for v1: Kamino dry-friction semantics pass `FIX-PASSIVE` on all three authoring paths |
+| Kamino effort-limit enforcement | Newton/Kamino integration maintainer | Resolved for v1: Kamino effort limits pass `FIX-LIMIT-EFFORT` on all three authoring paths |
 | MJWarp velocity-limit enforcement | [newton-physics/newton](https://github.com/newton-physics/newton) maintainers | Accepted gap for Isaac Lab v1: matrix stays `X`, no Isaac Lab issue; Isaac Lab does not intend to fix MJWarp enforcement |
 | Generic constraints and tendons | Asset API maintainers | Public authoring/runtime contract plus backend reconstruction/error semantics |
 | OVPhysX inclusion | OVPhysX maintainers | Separate backend mapping and support scope approved for a follow-up design |

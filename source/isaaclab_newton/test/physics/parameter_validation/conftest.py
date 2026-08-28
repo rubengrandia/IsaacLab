@@ -90,9 +90,10 @@ class _SingleDofParameterAdapter:
         )
         usd_stiffness, usd_damping, usd_armature = spec["usd"]
         cfg_stiffness, cfg_damping, cfg_armature = spec["cfg"]
-        effort_limit_spec = self._scalar_authoring_spec(authoring, effort_limit, 1.0e9)
+        runtime_effort_limit_baseline = effort_limit / 10.0 if authoring == "runtime" and effort_limit is not None else 1.0e9
+        effort_limit_spec = self._scalar_authoring_spec(authoring, effort_limit, runtime_effort_limit_baseline)
         velocity_limit_spec = self._scalar_authoring_spec(authoring, velocity_limit, None)
-        friction_spec = self._scalar_authoring_spec(authoring, friction, 0.0)
+        friction_spec = self._friction_authoring_spec(authoring, friction)
         passive_damping_spec = self._passive_damping_authoring_spec(authoring, passive_damping)
 
         with build_simulation_context(device=DEVICE, sim_cfg=self.profile_dof_cfg()) as sim:
@@ -487,6 +488,19 @@ class _SingleDofParameterAdapter:
         raise ValueError(f"Unknown authoring path: {authoring}")
 
     @staticmethod
+    def _friction_authoring_spec(authoring: str, value: float | None) -> dict:
+        """Resolve dry friction while preserving Kamino's runtime constraint topology."""
+        if value is None:
+            return {"usd": 0.0, "cfg": None, "runtime": None}
+        if authoring == "usd":
+            return {"usd": value, "cfg": None, "runtime": None}
+        if authoring == "cfg":
+            return {"usd": 0.0, "cfg": value, "runtime": None}
+        if authoring == "runtime":
+            return {"usd": value / 10.0, "cfg": None, "runtime": value}
+        raise ValueError(f"Unknown authoring path: {authoring}")
+
+    @staticmethod
     def _sim_cfg(*, dt: float, gravity: tuple[float, float, float]) -> SimulationCfg:
         raise NotImplementedError
 
@@ -570,6 +584,12 @@ class KaminoParameterAdapter(_SingleDofParameterAdapter):
                 solver_cfg=KaminoPADMMSolverCfg(
                     integrator="euler",
                     constraints=KaminoConstraintsCfg(alpha=alpha, beta=beta),
+                    dynamics_solver_cfg=KaminoPADMMCfg(
+                        max_iterations=100,
+                        primal_tolerance=1.0e-6,
+                        dual_tolerance=1.0e-6,
+                        compl_tolerance=1.0e-6,
+                    ),
                 ),
                 num_substeps=1,
                 use_cuda_graph=False,

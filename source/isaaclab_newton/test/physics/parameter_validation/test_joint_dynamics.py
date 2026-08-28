@@ -50,8 +50,6 @@ _PUBLIC_APIS = {
 
 _KAMINO_VELOCITY_LIMIT_REASON = "vastsoun/newton#397: Kamino does not enforce joint velocity limits"
 _MJWARP_VELOCITY_LIMIT_REASON = "Accepted gap: MJWarp stores but does not physically enforce joint velocity limits"
-_KAMINO_EFFORT_LIMIT_REASON = "vastsoun/newton#398: Kamino does not enforce joint effort limits"
-_KAMINO_FRICTION_REASON = "vastsoun/newton#383: Kamino does not enforce Newton joint dry friction"
 _VELOCITY_LIMIT_BACKENDS = [
     pytest.param(
         "kamino",
@@ -65,24 +63,18 @@ _VELOCITY_LIMIT_BACKENDS = [
     ),
 ]
 _EFFORT_LIMIT_BACKENDS = [
-    pytest.param(
-        "kamino",
-        id="kamino",
-        marks=pytest.mark.xfail(strict=True, reason=_KAMINO_EFFORT_LIMIT_REASON),
-    ),
+    pytest.param("kamino", id="kamino"),
     pytest.param("mjwarp", id="mjwarp"),
 ]
 _FRICTION_CASES = [
-    pytest.param(
-        "kamino",
-        "revolute",
-        id="kamino",
-        marks=pytest.mark.xfail(strict=True, reason=_KAMINO_FRICTION_REASON),
-    ),
+    pytest.param("kamino", "revolute", id="kamino-revolute"),
+    pytest.param("kamino", "prismatic", id="kamino-prismatic"),
     pytest.param("mjwarp", "revolute", id="mjwarp-revolute"),
     pytest.param("mjwarp", "prismatic", id="mjwarp-prismatic"),
 ]
 _FRICTION_BREAKAWAY_CASES = [
+    pytest.param("kamino", "revolute", id="kamino-revolute"),
+    pytest.param("kamino", "prismatic", id="kamino-prismatic"),
     pytest.param("mjwarp", "revolute", id="mjwarp-revolute"),
     pytest.param("mjwarp", "prismatic", id="mjwarp-prismatic"),
 ]
@@ -527,8 +519,8 @@ def test_cmd_01_feedforward_torque_explicit_single_step(parameter_adapter, joint
 @pytest.mark.parametrize("joint_type", ["revolute", "prismatic"])
 @pytest.mark.parametrize("effort", [5.0, 20.0])
 def test_cmd_01_feedforward_torque_explicit_runtime_topology_error(kamino, joint_type, effort):
-    """CMD-01: Kamino rejects adding dynamic-constraint topology at runtime."""
-    with pytest.raises(RuntimeError, match="Changing dynamic constraint topology"):
+    """CMD-01: Kamino rejects adding joint dynamics allocation at runtime."""
+    with pytest.raises(RuntimeError, match="Changing joint dynamics allocation"):
         kamino.run_single_dof_step(
             joint_type,
             "runtime-error",
